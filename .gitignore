@@ -32,6 +32,10 @@ yarn-error.log*
 
 # env files (can opt-in for committing if needed)
 .env*
+!.env.example
+
+# local status report (contains real customer phone numbers — not for public repos)
+/project-status.log
 
 # local CRM data (contains Twilio credentials)
 /data/*.json
