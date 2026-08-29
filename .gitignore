@@ -36,6 +36,14 @@ yarn-error.log*
 # local CRM data (contains Twilio credentials)
 /data/*.json
 
+# SQLite database files (live DB never committed; only migrations/ is)
+/data/*.db
+/data/*.db-*
+*.db
+*.db-*
+*.sqlite
+*.sqlite3
+
 # local tooling binaries
 /tools/
 

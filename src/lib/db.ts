@@ -1,5 +1,3 @@
-import { promises as fs } from "fs";
-import path from "path";
 import { randomUUID } from "crypto";
 import type {
   ActivityLog,
@@ -10,13 +8,7 @@ import type {
   ContactStatus,
   Settings,
 } from "./types";
-
-const DATA_DIR = path.join(process.cwd(), "data");
-const CONTACTS_FILE = path.join(DATA_DIR, "contacts.json");
-const SETTINGS_FILE = path.join(DATA_DIR, "settings.json");
-const ACTIVITY_FILE = path.join(DATA_DIR, "activity.json");
-const CALLS_FILE = path.join(DATA_DIR, "calls.json");
-const CLIENT_FILE = path.join(DATA_DIR, "client.json");
+import { getDb } from "./database";
 
 const DEFAULT_SETTINGS: Settings = {
   missedCallReplyTemplate:
@@ -24,99 +16,93 @@ const DEFAULT_SETTINGS: Settings = {
   fcmToken: "",
 };
 
-async function ensureDataDir() {
-  await fs.mkdir(DATA_DIR, { recursive: true });
+type ContactRow = Omit<Contact, "status"> & { status: string };
+type CallRow = Omit<Call, "callStatus" | "textBackSent"> & {
+  callStatus: string;
+  textBackSent: number;
+};
+
+function mapContact(row: ContactRow): Contact {
+  return { ...row, status: row.status as Contact["status"] };
 }
 
-async function readJson<T>(filePath: string, fallback: T): Promise<T> {
-  await ensureDataDir();
-  try {
-    const raw = await fs.readFile(filePath, "utf-8");
-    return JSON.parse(raw) as T;
-  } catch {
-    return fallback;
-  }
-}
-
-async function writeJson<T>(filePath: string, data: T): Promise<void> {
-  await ensureDataDir();
-  await fs.writeFile(filePath, JSON.stringify(data, null, 2), "utf-8");
-}
-
-// Serialize all writes to avoid read-modify-write races across concurrent
-// requests (e.g. simultaneous webhook callbacks). A per-process mutex is
-// sufficient for the single-instance deployment this app targets.
-let writeChain: Promise<unknown> = Promise.resolve();
-
-function withWriteLock<T>(fn: () => Promise<T>): Promise<T> {
-  const result = writeChain.then(fn, fn);
-  writeChain = result.then(
-    () => undefined,
-    () => undefined
-  );
-  return result;
+function mapCall(row: CallRow): Call {
+  return {
+    ...row,
+    callStatus: row.callStatus as Call["callStatus"],
+    textBackSent: Boolean(row.textBackSent),
+  };
 }
 
 export async function getContacts(): Promise<Contact[]> {
-  return readJson<Contact[]>(CONTACTS_FILE, []);
+  const rows = getDb()
+    .prepare("SELECT * FROM contacts ORDER BY createdAt DESC")
+    .all() as unknown as ContactRow[];
+  return rows.map(mapContact);
 }
 
 export async function getContactById(id: string): Promise<Contact | undefined> {
-  const contacts = await getContacts();
-  return contacts.find((c) => c.id === id);
+  const row = getDb()
+    .prepare("SELECT * FROM contacts WHERE id = ?")
+    .get(id) as ContactRow | undefined;
+  return row ? mapContact(row) : undefined;
 }
 
 export async function getContactByPhone(phone: string): Promise<Contact | undefined> {
   const normalized = normalizePhone(phone);
-  const contacts = await getContacts();
-  return contacts.find((c) => normalizePhone(c.phone) === normalized);
+  const rows = getDb()
+    .prepare("SELECT * FROM contacts")
+    .all() as unknown as ContactRow[];
+  return rows
+    .map(mapContact)
+    .find((c) => normalizePhone(c.phone) === normalized);
 }
 
 export async function createContact(
   data: Omit<Contact, "id" | "createdAt" | "updatedAt">
 ): Promise<Contact> {
-  return withWriteLock(async () => {
-    const contacts = await getContacts();
-    const now = new Date().toISOString();
-    const contact: Contact = {
-      ...data,
-      id: randomUUID(),
-      createdAt: now,
-      updatedAt: now,
-    };
-    contacts.push(contact);
-    await writeJson(CONTACTS_FILE, contacts);
-    return contact;
-  });
+  const now = new Date().toISOString();
+  const contact: Contact = {
+    ...data,
+    id: randomUUID(),
+    createdAt: now,
+    updatedAt: now,
+  };
+  getDb()
+    .prepare(
+      `INSERT INTO contacts (id, name, phone, email, status, notes, createdAt, updatedAt)
+       VALUES (@id, @name, @phone, @email, @status, @notes, @createdAt, @updatedAt)`
+    )
+    .run(contact);
+  return contact;
 }
 
 export async function updateContact(
   id: string,
   data: Partial<Omit<Contact, "id" | "createdAt">>
 ): Promise<Contact | null> {
-  return withWriteLock(async () => {
-    const contacts = await getContacts();
-    const index = contacts.findIndex((c) => c.id === id);
-    if (index === -1) return null;
+  const existing = await getContactById(id);
+  if (!existing) return null;
 
-    contacts[index] = {
-      ...contacts[index],
-      ...data,
-      updatedAt: new Date().toISOString(),
-    };
-    await writeJson(CONTACTS_FILE, contacts);
-    return contacts[index];
-  });
+  const updated: Contact = {
+    ...existing,
+    ...data,
+    updatedAt: new Date().toISOString(),
+  };
+  getDb()
+    .prepare(
+      `UPDATE contacts
+       SET name = @name, phone = @phone, email = @email, status = @status,
+           notes = @notes, updatedAt = @updatedAt
+       WHERE id = @id`
+    )
+    .run(updated);
+  return updated;
 }
 
 export async function deleteContact(id: string): Promise<boolean> {
-  return withWriteLock(async () => {
-    const contacts = await getContacts();
-    const filtered = contacts.filter((c) => c.id !== id);
-    if (filtered.length === contacts.length) return false;
-    await writeJson(CONTACTS_FILE, filtered);
-    return true;
-  });
+  const result = getDb().prepare("DELETE FROM contacts WHERE id = ?").run(id);
+  return result.changes > 0;
 }
 
 export async function upsertContactByPhone(
@@ -124,44 +110,54 @@ export async function upsertContactByPhone(
   status: ContactStatus,
   name?: string
 ): Promise<Contact> {
-  return withWriteLock(async () => {
-    const normalized = normalizePhone(phone);
-    const contacts = await getContacts();
-    const existing = contacts.find((c) => normalizePhone(c.phone) === normalized);
-    const now = new Date().toISOString();
+  const existing = await getContactByPhone(phone);
+  const now = new Date().toISOString();
 
-    if (existing) {
-      existing.status = status;
-      existing.updatedAt = now;
-      await writeJson(CONTACTS_FILE, contacts);
-      return existing;
-    }
+  if (existing) {
+    return (
+      (await updateContact(existing.id, { status })) ?? existing
+    );
+  }
 
-    const contact: Contact = {
-      id: randomUUID(),
-      name: name || phone,
-      phone,
-      email: "",
-      status,
-      notes: "",
-      createdAt: now,
-      updatedAt: now,
-    };
-    contacts.push(contact);
-    await writeJson(CONTACTS_FILE, contacts);
-    return contact;
-  });
+  const contact: Contact = {
+    id: randomUUID(),
+    name: name || phone,
+    phone,
+    email: "",
+    status,
+    notes: "",
+    createdAt: now,
+    updatedAt: now,
+  };
+  getDb()
+    .prepare(
+      `INSERT INTO contacts (id, name, phone, email, status, notes, createdAt, updatedAt)
+       VALUES (@id, @name, @phone, @email, @status, @notes, @createdAt, @updatedAt)`
+    )
+    .run(contact);
+  return contact;
 }
 
 export async function getSettings(): Promise<Settings> {
-  return readJson<Settings>(SETTINGS_FILE, DEFAULT_SETTINGS);
+  const row = getDb()
+    .prepare("SELECT missedCallReplyTemplate, fcmToken FROM settings WHERE id = 1")
+    .get() as { missedCallReplyTemplate: string; fcmToken: string } | undefined;
+  return row
+    ? { missedCallReplyTemplate: row.missedCallReplyTemplate, fcmToken: row.fcmToken }
+    : { ...DEFAULT_SETTINGS };
 }
 
 export async function saveSettings(settings: Settings): Promise<Settings> {
-  return withWriteLock(async () => {
-    await writeJson(SETTINGS_FILE, settings);
-    return settings;
-  });
+  getDb()
+    .prepare(
+      `INSERT INTO settings (id, missedCallReplyTemplate, fcmToken)
+       VALUES (1, @missedCallReplyTemplate, @fcmToken)
+       ON CONFLICT(id) DO UPDATE SET
+         missedCallReplyTemplate = excluded.missedCallReplyTemplate,
+         fcmToken = excluded.fcmToken`
+    )
+    .run(settings);
+  return settings;
 }
 
 export async function getBusinessFcmToken(): Promise<string> {
@@ -170,113 +166,168 @@ export async function getBusinessFcmToken(): Promise<string> {
 }
 
 export async function getClientProfile(): Promise<ClientProfile | null> {
-  return readJson<ClientProfile | null>(CLIENT_FILE, null);
+  const row = getDb()
+    .prepare("SELECT name, phone, address, email, createdAt FROM client_profile WHERE id = 1")
+    .get() as ClientProfile | undefined;
+  return row ?? null;
 }
 
 export async function saveClientProfile(
   profile: Omit<ClientProfile, "createdAt">
 ): Promise<ClientProfile> {
-  return withWriteLock(async () => {
-    const full: ClientProfile = {
-      ...profile,
-      createdAt: new Date().toISOString(),
-    };
-    await writeJson(CLIENT_FILE, full);
-    return full;
-  });
+  const full: ClientProfile = {
+    ...profile,
+    createdAt: new Date().toISOString(),
+  };
+  getDb()
+    .prepare(
+      `INSERT INTO client_profile (id, name, phone, address, email, createdAt)
+       VALUES (1, @name, @phone, @address, @email, @createdAt)
+       ON CONFLICT(id) DO UPDATE SET
+         name = excluded.name,
+         phone = excluded.phone,
+         address = excluded.address,
+         email = excluded.email,
+         createdAt = excluded.createdAt`
+    )
+    .run(full);
+  return full;
 }
 
 export async function getActivityLogs(): Promise<ActivityLog[]> {
-  return readJson<ActivityLog[]>(ACTIVITY_FILE, []);
+  return getDb()
+    .prepare("SELECT * FROM activity_logs ORDER BY createdAt DESC LIMIT 500")
+    .all() as unknown as ActivityLog[];
 }
 
 export async function getActivityLogsByContact(
   contactId: string
 ): Promise<ActivityLog[]> {
-  const logs = await getActivityLogs();
-  return logs.filter((l) => l.contactId === contactId);
+  return getDb()
+    .prepare("SELECT * FROM activity_logs WHERE contactId = ? ORDER BY createdAt DESC")
+    .all(contactId) as unknown as ActivityLog[];
 }
 
 export async function addActivityLog(
   data: Omit<ActivityLog, "id" | "createdAt">
 ): Promise<ActivityLog> {
-  return withWriteLock(async () => {
-    const logs = await getActivityLogs();
-    const log: ActivityLog = {
-      ...data,
-      id: randomUUID(),
-      createdAt: new Date().toISOString(),
-    };
-    logs.unshift(log);
-    await writeJson(ACTIVITY_FILE, logs.slice(0, 500));
-    return log;
-  });
+  const log: ActivityLog = {
+    ...data,
+    id: randomUUID(),
+    createdAt: new Date().toISOString(),
+  };
+  getDb()
+    .prepare(
+      `INSERT INTO activity_logs (id, contactId, type, message, createdAt)
+       VALUES (@id, @contactId, @type, @message, @createdAt)`
+    )
+    .run(log);
+  return log;
 }
 
 export async function getCalls(): Promise<Call[]> {
-  return readJson<Call[]>(CALLS_FILE, []);
+  const rows = getDb()
+    .prepare("SELECT * FROM calls ORDER BY callStartedAt DESC")
+    .all() as unknown as CallRow[];
+  return rows.map(mapCall);
 }
 
 export async function addCall(
   data: Omit<Call, "id" | "createdAt" | "updatedAt">
 ): Promise<Call> {
-  return withWriteLock(async () => {
-    const calls = await getCalls();
-    const now = new Date().toISOString();
-    const call: Call = {
-      ...data,
-      id: randomUUID(),
-      createdAt: now,
-      updatedAt: now,
-    };
-    calls.unshift(call);
-    await writeJson(CALLS_FILE, calls);
-    return call;
-  });
+  const now = new Date().toISOString();
+  const call: Call = {
+    ...data,
+    id: randomUUID(),
+    createdAt: now,
+    updatedAt: now,
+  };
+  const params = {
+    ...call,
+    textBackSent: call.textBackSent ? 1 : 0,
+  };
+  getDb()
+    .prepare(
+      `INSERT INTO calls (
+         id, businessId, callerNumber, businessNumber, callStatus,
+         callStartedAt, callEndedAt, durationSeconds, textBackSent,
+         textBackSentAt, signalwireCallSid, recordingUrl, transcript,
+         createdAt, updatedAt
+       ) VALUES (
+         @id, @businessId, @callerNumber, @businessNumber, @callStatus,
+         @callStartedAt, @callEndedAt, @durationSeconds, @textBackSent,
+         @textBackSentAt, @signalwireCallSid, @recordingUrl, @transcript,
+         @createdAt, @updatedAt
+       )`
+    )
+    .run(params);
+  return call;
 }
 
 export async function updateCall(
   id: string,
   data: Partial<Omit<Call, "id" | "createdAt">>
 ): Promise<Call | null> {
-  return withWriteLock(async () => {
-    const calls = await getCalls();
-    const index = calls.findIndex((c) => c.id === id);
-    if (index === -1) return null;
+  const existing = await getCallById(id);
+  if (!existing) return null;
 
-    calls[index] = {
-      ...calls[index],
-      ...data,
-      updatedAt: new Date().toISOString(),
-    };
-    await writeJson(CALLS_FILE, calls);
-    return calls[index];
-  });
+  const updated: Call = {
+    ...existing,
+    ...data,
+    updatedAt: new Date().toISOString(),
+  };
+  const params = {
+    ...updated,
+    textBackSent: updated.textBackSent ? 1 : 0,
+  };
+  getDb()
+    .prepare(
+      `UPDATE calls SET
+         businessId = @businessId, callerNumber = @callerNumber,
+         businessNumber = @businessNumber, callStatus = @callStatus,
+         callStartedAt = @callStartedAt, callEndedAt = @callEndedAt,
+         durationSeconds = @durationSeconds, textBackSent = @textBackSent,
+         textBackSentAt = @textBackSentAt, signalwireCallSid = @signalwireCallSid,
+         recordingUrl = @recordingUrl, transcript = @transcript,
+         updatedAt = @updatedAt
+       WHERE id = @id`
+    )
+    .run(params);
+  return updated;
+}
+
+async function getCallById(id: string): Promise<Call | null> {
+  const row = getDb()
+    .prepare("SELECT * FROM calls WHERE id = ?")
+    .get(id) as CallRow | undefined;
+  return row ? mapCall(row) : null;
 }
 
 export async function getCallBySignalwireSid(
   signalwireCallSid: string
 ): Promise<Call | null> {
   if (!signalwireCallSid) return null;
-  const calls = await getCalls();
-  return calls.find((c) => c.signalwireCallSid === signalwireCallSid) ?? null;
+  const row = getDb()
+    .prepare("SELECT * FROM calls WHERE signalwireCallSid = ?")
+    .get(signalwireCallSid) as CallRow | undefined;
+  return row ? mapCall(row) : null;
 }
 
 export async function getCallsByStatus(
   status: CallStatus,
   since?: string
 ): Promise<Call[]> {
-  const calls = await getCalls();
-  return calls.filter(
-    (c) => c.callStatus === status && (!since || c.callStartedAt >= since)
-  );
+  const rows = getDb()
+    .prepare(
+      "SELECT * FROM calls WHERE callStatus = ? AND (? IS NULL OR callStartedAt >= ?) ORDER BY callStartedAt DESC"
+    )
+    .all(status, since ?? null, since ?? null) as unknown as CallRow[];
+  return rows.map(mapCall);
 }
 
 export function normalizePhone(phone: string): string {
   const cleaned = phone.replace(/[^\d+]/g, "");
   if (cleaned.startsWith("+")) return cleaned;
-  // Keep the full national number instead of last-10-digits to avoid
-  // collisions across country codes; fall back to stripping the leading 0.
   return cleaned;
 }
 
