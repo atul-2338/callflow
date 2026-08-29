@@ -51,6 +51,9 @@ yarn-error.log*
 # local tooling binaries
 /tools/
 
+# local Kilo/agent config (contains API keys — never commit)
+/.kilo/
+
 # vercel
 .vercel
 
