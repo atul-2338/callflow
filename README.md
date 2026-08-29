@@ -7,7 +7,7 @@ A single-tenant call/messaging CRM that handles inbound calls with an in-call vo
 - **Next.js 16** (App Router, typed routes) + **React 19** + **TypeScript** (strict) + **Tailwind CSS 4**
 - **SignalWire** (`@signalwire/compatibility-api`) — voice IVR + SMS
 - **Firebase Admin** (`firebase-admin`) — push notifications via FCM
-- JSON-file persistence (`data/*.json`) — no external database required
+- **SQLite** (`better-sqlite3`) — persistent database (file location configurable via `DATABASE_PATH`)
 
 ## Getting started
 
@@ -31,6 +31,27 @@ Copy `.env.example` to `.env.local` and fill in real values:
 | `BUSINESS_OWNER_NUMBER` | Number inbound calls are forwarded to (leave empty for voicemail-only mode) |
 | `FIREBASE_SERVICE_ACCOUNT` | Firebase service account JSON — single-line or base64-encoded |
 | `APP_AUTH_TOKEN` | *Optional.* Shared secret to protect write APIs (leave empty to keep APIs open) |
+| `DATABASE_PATH` | *Optional.* Filesystem path to the SQLite database file. Defaults to `./data/callflow.db` locally. |
+
+## Database (SQLite)
+
+CallFlow stores all data (contacts, settings, client profile, activity logs, calls) in a single SQLite database file using `better-sqlite3`.
+
+- **Schema:** `migrations/schema.sql` (applied automatically at startup via `CREATE TABLE IF NOT EXISTS`).
+- **Default location:** `./data/callflow.db`.
+- **Override:** set `DATABASE_PATH` to point the database elsewhere.
+
+### Local setup
+
+The schema is created automatically on first run. To import an existing `data/*.json` export into SQLite (one-time migration from the old JSON-file persistence):
+
+```bash
+npm run db:migrate
+```
+
+This reads `data/contacts.json`, `data/settings.json`, `data/client.json`, `data/activity.json`, and `data/calls.json` and imports them into the database at `DATABASE_PATH` (or the default `./data/callflow.db`). It is safe to run multiple times (uses upserts).
+
+> The live `.db` file is gitignored — only `migrations/schema.sql` is committed. Never commit a database file.
 
 ## SignalWire voice webhook (required for real calls)
 
@@ -84,3 +105,43 @@ npm run test:build   # production build
 ## Auth
 
 Write endpoints are protected by an optional bearer token. Set `APP_AUTH_TOKEN` in `.env.local` and paste the same value in **Settings → API Access Token**. Leave both empty to keep the API open (default).
+
+## Deploying to Render
+
+### Required environment variables
+
+| Variable | Notes |
+|---|---|
+| `SIGNALWIRE_PROJECT_ID` | Real SignalWire project ID |
+| `SIGNALWIRE_API_TOKEN` | Real SignalWire API token |
+| `SIGNALWIRE_SPACE_URL` | e.g. `https://your-space.signalwire.com` |
+| `SIGNALWIRE_FROM_NUMBER` | The business number hosted on SignalWire |
+| `BUSINESS_OWNER_NUMBER` | Owner's cell phone to forward calls to |
+| `FIREBASE_SERVICE_ACCOUNT` | Firebase service account JSON (single-line or base64) |
+| `DATABASE_PATH` | **Required in production.** Absolute path on the persistent disk mount (see below) |
+| `APP_AUTH_TOKEN` | Optional shared secret for write APIs |
+
+### Why `DATABASE_PATH` must point to a persistent disk
+
+Render's filesystem is **ephemeral** — anything written to the default project directory is wiped on every redeploy/restart. If the SQLite file stays at the default `./data/callflow.db`, your contacts/calls/settings will be **lost on every deploy**.
+
+You must:
+
+1. Attach a **persistent disk** to your Render service (Dashboard → your service → **Disks** → Add Disk). Mount it at e.g. `/var/data`.
+2. Set `DATABASE_PATH=/var/data/callflow.db`.
+
+The schema is created automatically on first boot — no manual migration step is required in production (there is no legacy JSON to import).
+
+### Build & start
+
+- Build command: `npm install && npm run build`
+- Start command: `npm start`
+- Node version: set `Node >= 22` (or use the repo's `engines` field).
+
+### SignalWire voice webhook
+
+After deploy, set the number's **Voice webhook** (incoming call handler) to:
+
+```
+https://<your-app-on-render>.onrender.com/api/ivr/incoming-call
+```
