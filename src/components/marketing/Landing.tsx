@@ -1,60 +1,60 @@
-"use client";
-
 import Link from "next/link";
 import {
   ArrowRight,
-  BarChart3,
+  Bell,
+  Bot,
+  CalendarCheck,
   CheckCircle2,
-  Mic,
   Phone,
-  PhoneCall,
   PhoneForwarded,
   Star,
-  Voicemail,
 } from "lucide-react";
 
 const steps = [
   {
     icon: PhoneForwarded,
-    title: "Connect your number",
-    text: "Enter your business phone and forward missed calls to CallFlow in under two minutes.",
+    tint: "bg-wire/10 text-wire",
+    title: "Forward your missed calls",
+    text: "Pick your number and set call forwarding on your carrier — we generate the exact code for you. About two minutes, no hardware.",
   },
   {
-    icon: Voicemail,
-    title: "We catch every missed call",
-    text: "If you don't answer within 20 seconds, we pick up, take a message, and save it automatically.",
+    icon: Bot,
+    tint: "bg-callback/10 text-callback",
+    title: "Our AI answers instantly",
+    text: "When you can't pick up, CallFlow's AI receptionist answers in your business name, takes a full message, and answers FAQs.",
   },
   {
-    icon: BarChart3,
-    title: "Turn leads into callbacks",
-    text: "Every voicemail lands in your dashboard with the transcript and a one-tap call-back button.",
+    icon: CalendarCheck,
+    tint: "bg-booked/10 text-booked",
+    title: "Leads become booked jobs",
+    text: "Appointments get booked, every call lands in your log with a transcript, and a push hits your phone the moment the call ends.",
   },
 ];
 
 const stats = [
-  { value: "62%", label: "of local business calls go unanswered" },
-  { value: "~40%", label: "of callers never try again after voicemail" },
-  { value: "1 min", label: "to set up CallFlow for your business" },
+  { value: "62%", tone: "text-callback", label: "of local business calls go unanswered" },
+  { value: "~40%", tone: "text-danger", label: "of callers never try again after a missed call" },
+  { value: "2 min", tone: "text-booked", label: "to set CallFlow up for your business" },
 ];
 
 const reviews = [
   {
     quote:
-      "I was losing customers every time I stepped away from the desk. CallFlow caught a leak job and I called back in minutes.",
+      "I was losing customers every time I stepped away from the desk. CallFlow caught a leak job, booked it, and I confirmed in minutes.",
     name: "Marcus Reeves",
     business: "Reeves Plumbing, Austin TX",
     stars: 5,
   },
   {
     quote:
-      "My salon is one person. While I'm in a chair with a client, CallFlow answers, takes the message, and books get saved.",
+      "My salon is one person. While I'm in a chair with a client, CallFlow answers and books the appointment for me.",
     name: "Dana Whitfield",
     business: "Whitfield Beauty Bar, Denver CO",
     stars: 5,
   },
   {
     quote:
-      "The voicemail transcripts are spot-on. I read them on my phone between calls and decide who to call back first.",
+      "The transcripts are spot-on. I read them on my phone between calls and decide who to call back first.",
     name: "Priya Sharma",
     business: "Sharma Dental, Seattle WA",
     stars: 5,
@@ -75,7 +75,241 @@ const reviews = [
   },
 ];
 
-const trustBadges = ["Verified US businesses", "PCI-free, no setup fees", "GDPR-ready transcripts", "2-minute setup"];
+const trustBadges = [
+  "US phone numbers",
+  "No apps for your customers",
+  "Transcripts saved to your account",
+  "Cancel anytime",
+];
+
+const planFeatures = [
+  "24/7 AI answering & message taking",
+  "Appointment booking for your business",
+  "Call log with full transcripts",
+  "Instant push notification per call",
+  "Your own dedicated number",
+  "Setup in about 2 minutes",
+];
+
+export default function Landing() {
+  return (
+    <main>
+      <Header />
+      <Hero />
+      <Stats />
+      <HowItWorks />
+      <Pricing />
+      <Reviews />
+      <TrustStrip />
+      <FinalCta />
+      <Footer />
+    </main>
+  );
+}
+
+function Header() {
+  return (
+    <header className="sticky top-0 z-40 border-b border-separator bg-white/80 backdrop-blur">
+      <div className="mx-auto flex w-full max-w-6xl items-center justify-between px-4 py-3.5 sm:px-6">
+        <div className="flex items-center gap-2.5">
+          <div className="flex h-9 w-9 items-center justify-center rounded-[10px] bg-wire text-white shadow-[var(--shadow-pill)]">
+            <Phone className="h-4.5 w-4.5" />
+          </div>
+          <span className="text-lg font-semibold tracking-tight text-ink">
+            CallFlow
+          </span>
+        </div>
+        <nav className="flex items-center gap-5 text-sm font-medium text-ink-2">
+          <a href="#how" className="hidden hover:text-ink sm:inline">
+            How it works
+          </a>
+          <a href="#pricing" className="hidden hover:text-ink sm:inline">
+            Pricing
+          </a>
+          <Link href="/onboarding" className="ios-pill-primary px-4 py-2 text-sm">
+            Get started
+          </Link>
+        </nav>
+      </div>
+    </header>
+  );
+}
+
+function Hero() {
+  return (
+    <section className="mx-auto w-full max-w-3xl px-4 pb-12 pt-16 text-center sm:pt-24">
+      <span className="inline-flex items-center rounded-full bg-wire/10 px-3.5 py-1.5 text-xs font-semibold text-wire">
+        AI answering for local businesses
+      </span>
+      <h1 className="mt-5 text-4xl font-bold leading-[1.08] tracking-tight text-ink sm:text-6xl">
+        Never miss another call.
+      </h1>
+      <p className="mx-auto mt-5 max-w-2xl text-lg leading-relaxed text-ink-2">
+        CallFlow answers your business&apos;s missed calls with an AI
+        receptionist that takes messages, answers FAQs, and books
+        appointments — then pings your phone. Set up in two minutes.
+      </p>
+      <div className="mt-8 flex flex-wrap items-center justify-center gap-3">
+        <Link
+          href="/onboarding"
+          className="ios-pill-primary px-6 py-3 text-[15px]"
+        >
+          Start free trial — $0 today
+          <ArrowRight className="h-4 w-4" />
+        </Link>
+        <a href="#how" className="ios-pill-secondary px-6 py-3 text-[15px]">
+          See how it works
+        </a>
+      </div>
+
+      <div className="ios-card mx-auto mt-14 max-w-sm p-5 text-left">
+        <div className="flex items-center justify-between border-b border-separator pb-4">
+          <div className="flex items-center gap-3">
+            <div className="flex h-10 w-10 items-center justify-center rounded-full bg-wire/10 text-wire">
+              <Phone className="h-4.5 w-4.5" />
+            </div>
+            <div>
+              <p className="text-sm font-semibold text-ink">
+                Caller (555) 010-2233
+              </p>
+              <p className="text-xs text-ink-3">Missed your line · just now</p>
+            </div>
+          </div>
+          <span className="rounded-full bg-booked/10 px-2.5 py-1 text-[11px] font-semibold text-booked">
+            Answered
+          </span>
+        </div>
+        <ul className="space-y-4 pt-4">
+          <li className="flex items-start gap-3">
+            <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-[10px] bg-callback/10 text-callback">
+              <Bot className="h-4 w-4" />
+            </span>
+            <div>
+              <p className="text-sm font-medium text-ink">
+                AI receptionist picked up in 2 rings
+              </p>
+              <p className="text-xs text-ink-3">9:40 AM</p>
+            </div>
+          </li>
+          <li className="flex items-start gap-3">
+            <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-[10px] bg-booked/10 text-booked">
+              <CalendarCheck className="h-4 w-4" />
+            </span>
+            <div>
+              <p className="text-sm font-medium text-ink">
+                Appointment booked — Tue 10:00 AM
+              </p>
+              <p className="text-xs text-ink-3">Water heater leak · priority</p>
+            </div>
+          </li>
+          <li className="flex items-start gap-3">
+            <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-[10px] bg-wire/10 text-wire">
+              <Bell className="h-4 w-4" />
+            </span>
+            <div>
+              <p className="text-sm font-medium text-ink">
+                Push sent to owner&apos;s iPhone
+              </p>
+              <p className="text-xs text-ink-3">9:41 AM · transcript attached</p>
+            </div>
+          </li>
+        </ul>
+      </div>
+    </section>
+  );
+}
+
+function Stats() {
+  return (
+    <section className="mx-auto w-full max-w-6xl px-4 pb-4 sm:px-6">
+      <div className="grid gap-4 sm:grid-cols-3">
+        {stats.map((s) => (
+          <div key={s.value} className="ios-card p-6 text-center">
+            <p className={`text-4xl font-bold tracking-tight ${s.tone}`}>
+              {s.value}
+            </p>
+            <p className="mt-2 text-sm leading-snug text-ink-2">{s.label}</p>
+          </div>
+        ))}
+      </div>
+    </section>
+  );
+}
+
+function HowItWorks() {
+  return (
+    <section id="how" className="mx-auto w-full max-w-6xl px-4 py-20 sm:px-6">
+      <h2 className="text-center text-3xl font-bold tracking-tight text-ink sm:text-4xl">
+        From missed call to booked job
+      </h2>
+      <p className="mx-auto mt-3 max-w-xl text-center text-base leading-relaxed text-ink-2">
+        Three steps. No hardware. No apps for your customers.
+      </p>
+      <div className="mt-12 grid gap-5 md:grid-cols-3">
+        {steps.map((s, i) => (
+          <div key={s.title} className="ios-card p-6">
+            <div
+              className={`flex h-12 w-12 items-center justify-center rounded-2xl ${s.tint}`}
+            >
+              <s.icon className="h-6 w-6" />
+            </div>
+            <p className="mt-4 text-xs font-semibold uppercase tracking-wide text-ink-3">
+              Step {i + 1}
+            </p>
+            <h3 className="mt-1 text-lg font-semibold text-ink">{s.title}</h3>
+            <p className="mt-2 text-sm leading-relaxed text-ink-2">{s.text}</p>
+          </div>
+        ))}
+      </div>
+    </section>
+  );
+}
+
+function Pricing() {
+  return (
+    <section id="pricing" className="mx-auto w-full max-w-6xl px-4 pb-20 sm:px-6">
+      <h2 className="text-center text-3xl font-bold tracking-tight text-ink sm:text-4xl">
+        Simple pricing
+      </h2>
+      <p className="mx-auto mt-3 max-w-xl text-center text-base text-ink-2">
+        One plan. Try it free for 3 days — you pay nothing today.
+      </p>
+      <div className="ios-card mx-auto mt-10 max-w-md p-8">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <p className="text-lg font-semibold text-ink">CallFlow Pro</p>
+          <span className="rounded-full bg-booked/10 px-3 py-1 text-xs font-semibold text-booked">
+            3-day free trial
+          </span>
+        </div>
+        <div className="mt-4 flex items-baseline gap-2">
+          <span className="text-5xl font-bold tracking-tight text-ink">$0</span>
+          <span className="text-sm text-ink-2">due today</span>
+        </div>
+        <p className="mt-1 text-sm text-ink-2">
+          then <b className="text-ink">$49 / month</b> · cancel anytime
+        </p>
+        <ul className="mt-6 space-y-3">
+          {planFeatures.map((f) => (
+            <li key={f} className="flex items-start gap-2.5 text-sm text-ink-2">
+              <CheckCircle2 className="mt-0.5 h-4.5 w-4.5 shrink-0 text-booked" />
+              {f}
+            </li>
+          ))}
+        </ul>
+        <Link
+          href="/onboarding"
+          className="ios-pill-primary mt-8 w-full px-4 py-3.5 text-[15px]"
+        >
+          Start your 3-day free trial
+          <ArrowRight className="h-4 w-4" />
+        </Link>
+        <p className="mt-3 text-center text-xs text-ink-3">
+          No charge today. Cancel anytime before day 3.
+        </p>
+      </div>
+    </section>
+  );
+}
 
 function Stars({ count }: { count: number }) {
   return (
@@ -83,230 +317,110 @@ function Stars({ count }: { count: number }) {
       {Array.from({ length: 5 }).map((_, i) => (
         <Star
           key={i}
-          className={`h-4 w-4 ${i < count ? "fill-amber-400 text-amber-400" : "fill-white/10 text-white/10"}`}
+          className={`h-4 w-4 ${
+            i < count ? "fill-callback text-callback" : "fill-black/10 text-black/10"
+          }`}
         />
       ))}
     </div>
   );
 }
 
-export default function Landing() {
+function Reviews() {
   return (
-    <div className="min-h-screen bg-[#0f1117]">
-      <header className="mx-auto flex max-w-7xl items-center justify-between px-4 py-4 sm:px-6 lg:px-8">
-        <div className="flex items-center gap-2.5">
-          <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-brand-500 text-white shadow-lg shadow-brand-500/20">
-            <Phone className="h-4.5 w-4.5" />
-          </div>
-          <span className="text-lg font-semibold tracking-tight text-white">CallFlow</span>
-        </div>
-        <nav className="flex items-center gap-6 text-sm font-medium text-slate-400">
-          <a href="#how-it-works" className="hidden hover:text-white sm:inline">
-            How it works
-          </a>
-          <Link href="/setup" className="hidden hover:text-white sm:inline">
-            Get started
-          </Link>
+    <section className="mx-auto w-full max-w-6xl px-4 pb-20 sm:px-6">
+      <h2 className="text-center text-3xl font-bold tracking-tight text-ink sm:text-4xl">
+        Trusted by local businesses
+      </h2>
+      <p className="mx-auto mt-3 max-w-xl text-center text-base text-ink-2">
+        Plumbers, salons, clinics, and contractors across the US never miss a
+        lead.
+      </p>
+      <div className="mt-12 grid gap-5 md:grid-cols-2 lg:grid-cols-3">
+        {reviews.map((r) => (
+          <figure key={r.name} className="ios-card p-6">
+            <Stars count={r.stars} />
+            <blockquote className="mt-4 text-sm leading-relaxed text-ink-2">
+              “{r.quote}”
+            </blockquote>
+            <figcaption className="mt-5 flex items-center gap-3">
+              <div className="flex h-9 w-9 items-center justify-center rounded-full bg-wire/10 text-sm font-semibold text-wire">
+                {r.name.charAt(0)}
+              </div>
+              <div>
+                <p className="text-sm font-semibold text-ink">{r.name}</p>
+                <p className="text-xs text-ink-3">{r.business}</p>
+              </div>
+            </figcaption>
+          </figure>
+        ))}
+        <div className="flex flex-col items-center justify-center rounded-2xl border-2 border-dashed border-separator bg-white/50 p-6 text-center">
+          <p className="text-sm font-medium text-ink-2">
+            Your business could be here
+          </p>
           <Link
-            href="/setup"
-            className="rounded-lg bg-brand-500 px-4 py-2 font-semibold text-white shadow-lg shadow-brand-500/20 transition-colors hover:bg-brand-400"
+            href="/onboarding"
+            className="ios-pill-primary mt-3 px-4 py-2 text-sm"
           >
             Get started
-          </Link>
-        </nav>
-      </header>
-
-      <section className="mx-auto max-w-7xl px-4 py-16 sm:px-6 lg:px-8 lg:py-24">
-        <div className="grid items-center gap-12 lg:grid-cols-2">
-          <div>
-            <span className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/5 px-3 py-1 text-sm font-medium text-brand-300">
-              <CheckCircle2 className="h-4 w-4" />
-              Never lose a lead again
-            </span>
-            <h1 className="mt-5 text-4xl font-bold tracking-tight text-white sm:text-5xl lg:text-6xl">
-              Every missed call is money on the table.
-            </h1>
-            <p className="mt-5 text-lg leading-relaxed text-slate-400">
-              When you&apos;re on another call, in a back room, or closed for lunch,
-              CallFlow picks up in 20 seconds, records a voicemail, and puts it in
-              your dashboard — so no lead slips through.
-            </p>
-            <div className="mt-8 flex flex-col gap-3 sm:flex-row">
-              <Link
-                href="/setup"
-                className="inline-flex items-center justify-center gap-2 rounded-lg bg-brand-500 px-6 py-3 text-sm font-semibold text-white shadow-lg shadow-brand-500/25 transition-colors hover:bg-brand-400"
-              >
-                Start for free
-                <ArrowRight className="h-4 w-4" />
-              </Link>
-              <Link
-                href="/setup"
-                className="inline-flex items-center justify-center gap-2 rounded-lg border border-white/10 bg-white/5 px-6 py-3 text-sm font-semibold text-slate-200 transition-colors hover:bg-white/10"
-              >
-                View demo dashboard
-              </Link>
-            </div>
-          </div>
-
-          <div className="relative">
-            <div className="rounded-2xl border border-white/10 bg-[#161a24] p-6 shadow-2xl shadow-black/40">
-              <div className="flex items-center gap-3 border-b border-white/5 pb-4">
-                <div className="flex h-10 w-10 items-center justify-center rounded-full bg-red-500/10 text-red-400">
-                  <PhoneCall className="h-5 w-5" />
-                </div>
-                <div className="flex-1">
-                  <p className="text-sm font-semibold text-white">Missed call caught</p>
-                  <p className="text-xs text-slate-500">Just now · 41 sec voicemail</p>
-                </div>
-                <span className="rounded-full bg-brand-500/10 px-2.5 py-1 text-xs font-semibold text-brand-300">
-                  New lead
-                </span>
-              </div>
-              <div className="mt-4 space-y-3">
-                <div className="rounded-lg bg-white/5 p-3">
-                  <p className="text-xs font-medium uppercase tracking-wide text-slate-500">
-                    Voicemail transcript
-                  </p>
-                  <p className="mt-1 text-sm text-slate-300">
-                    “Hi, my bathroom faucet is leaking and I need someone today — my number
-                    is…”
-                  </p>
-                </div>
-                <div className="flex gap-3">
-                  <div className="flex-1 rounded-lg border border-white/10 bg-white/5 p-3">
-                    <p className="text-xs text-slate-500">Caller</p>
-                    <p className="text-sm font-semibold text-slate-100">+1 (555) 123-4567</p>
-                  </div>
-                  <div className="flex-1 rounded-lg border border-white/10 bg-white/5 p-3">
-                    <p className="text-xs text-slate-500">Action</p>
-                    <p className="text-sm font-semibold text-brand-400">Call back →</p>
-                  </div>
-                </div>
-              </div>
-            </div>
-            <div className="absolute -left-6 -top-6 -z-10 h-40 w-40 rounded-full bg-brand-500/10 blur-2xl" />
-            <div className="absolute -bottom-8 -right-6 -z-10 h-48 w-48 rounded-full bg-brand-500/5 blur-3xl" />
-          </div>
-        </div>
-      </section>
-
-      <section className="border-y border-white/5 bg-[#11141c]">
-        <div className="mx-auto grid max-w-7xl gap-8 px-4 py-12 sm:grid-cols-3 sm:px-6 lg:px-8">
-          {stats.map((s) => (
-            <div key={s.label} className="text-center sm:text-left">
-              <p className="text-3xl font-bold tracking-tight text-white">{s.value}</p>
-              <p className="mt-1 text-sm text-slate-500">{s.label}</p>
-            </div>
-          ))}
-        </div>
-      </section>
-
-      <section id="how-it-works" className="mx-auto max-w-7xl px-4 py-20 sm:px-6 lg:px-8">
-        <div className="mx-auto max-w-2xl text-center">
-          <h2 className="text-3xl font-bold tracking-tight text-white sm:text-4xl">
-            Set up once. Catch every call.
-          </h2>
-          <p className="mt-4 text-lg text-slate-400">
-            Built for plumbers, salons, clinics, and contractors who can&apos;t always
-            answer the phone.
-          </p>
-        </div>
-        <div className="mt-14 grid gap-6 md:grid-cols-3">
-          {steps.map(({ icon: Icon, title, text }, i) => (
-            <div
-              key={title}
-              className="relative rounded-2xl border border-white/10 bg-[#161a24] p-6 transition-colors hover:border-white/20"
-            >
-              <span className="absolute right-5 top-5 text-sm font-semibold text-white/10">
-                0{i + 1}
-              </span>
-              <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-brand-500/10 text-brand-400">
-                <Icon className="h-5.5 w-5.5" />
-              </div>
-              <h3 className="mt-4 text-lg font-semibold text-white">{title}</h3>
-              <p className="mt-2 text-sm leading-relaxed text-slate-400">{text}</p>
-            </div>
-          ))}
-        </div>
-      </section>
-
-      <section className="mx-auto max-w-7xl px-4 py-20 sm:px-6 lg:px-8">
-        <div className="mx-auto max-w-2xl text-center">
-          <h2 className="text-3xl font-bold tracking-tight text-white sm:text-4xl">
-            Trusted by local businesses
-          </h2>
-          <p className="mt-4 text-lg text-slate-400">
-            Plumbers, salons, clinics, and contractors across the US never miss a lead.
-          </p>
-        </div>
-        <div className="mt-12 grid gap-5 md:grid-cols-2 lg:grid-cols-3">
-          {reviews.map((r) => (
-            <figure
-              key={r.name}
-              className="rounded-2xl border border-white/10 bg-[#161a24] p-6 transition-colors hover:border-white/20"
-            >
-              <Stars count={r.stars} />
-              <blockquote className="mt-4 text-sm leading-relaxed text-slate-300">
-                “{r.quote}”
-              </blockquote>
-              <figcaption className="mt-5 flex items-center gap-3">
-                <div className="flex h-9 w-9 items-center justify-center rounded-full bg-brand-500/15 text-sm font-semibold text-brand-300">
-                  {r.name.charAt(0)}
-                </div>
-                <div>
-                  <p className="text-sm font-semibold text-white">{r.name}</p>
-                  <p className="text-xs text-slate-500">{r.business}</p>
-                </div>
-              </figcaption>
-            </figure>
-          ))}
-          <div className="flex flex-col items-center justify-center rounded-2xl border border-dashed border-white/10 p-6 text-center">
-            <p className="text-sm font-medium text-slate-400">Your business could be here</p>
-            <Link
-              href="/setup"
-              className="mt-3 inline-flex items-center gap-1.5 rounded-lg bg-brand-500 px-4 py-2 text-sm font-semibold text-white shadow-lg shadow-brand-500/20 hover:bg-brand-400"
-            >
-              Get started
-              <ArrowRight className="h-4 w-4" />
-            </Link>
-          </div>
-        </div>
-      </section>
-
-      <section className="border-y border-white/5 bg-[#11141c]">
-        <div className="mx-auto flex max-w-7xl flex-wrap items-center justify-center gap-x-12 gap-y-4 px-4 py-10 sm:px-6 lg:px-8">
-          {trustBadges.map((b) => (
-            <span key={b} className="flex items-center gap-2 text-sm font-medium text-slate-500">
-              <CheckCircle2 className="h-4 w-4 text-brand-500/60" />
-              {b}
-            </span>
-          ))}
-        </div>
-      </section>
-
-      <section className="mx-auto max-w-7xl px-4 py-20 sm:px-6 lg:px-8">
-        <div className="rounded-3xl border border-brand-500/20 bg-gradient-to-br from-brand-500/10 via-transparent to-transparent p-10 text-center sm:p-16">
-          <Mic className="mx-auto h-8 w-8 text-brand-400" />
-          <h2 className="mx-auto mt-4 max-w-2xl text-3xl font-bold tracking-tight text-white sm:text-4xl">
-            Your next customer is calling right now. Make sure you hear them.
-          </h2>
-          <Link
-            href="/setup"
-            className="mt-8 inline-flex items-center gap-2 rounded-lg bg-brand-500 px-6 py-3 text-sm font-semibold text-white shadow-lg shadow-brand-500/25 transition-colors hover:bg-brand-400"
-          >
-            Get started in 2 minutes
             <ArrowRight className="h-4 w-4" />
           </Link>
         </div>
-      </section>
+      </div>
+    </section>
+  );
+}
 
-      <footer className="mx-auto flex max-w-7xl flex-col items-center justify-between gap-4 border-t border-white/5 px-4 py-8 text-sm text-slate-500 sm:flex-row sm:px-6 lg:px-8">
+function TrustStrip() {
+  return (
+    <section className="border-y border-separator bg-white/60">
+      <div className="mx-auto flex w-full max-w-6xl flex-wrap items-center justify-center gap-x-10 gap-y-3 px-4 py-8 sm:px-6">
+        {trustBadges.map((b) => (
+          <span
+            key={b}
+            className="flex items-center gap-2 text-sm font-medium text-ink-2"
+          >
+            <CheckCircle2 className="h-4 w-4 text-booked" />
+            {b}
+          </span>
+        ))}
+      </div>
+    </section>
+  );
+}
+
+function FinalCta() {
+  return (
+    <section className="mx-auto w-full max-w-6xl px-4 py-20 sm:px-6">
+      <div className="rounded-3xl bg-gradient-to-br from-[#0A84FF] to-[#0050C8] p-10 text-center text-white shadow-[0_20px_60px_rgba(0,122,255,0.35)] sm:p-16">
+        <Bot className="mx-auto h-10 w-10" />
+        <h2 className="mx-auto mt-4 max-w-2xl text-3xl font-bold tracking-tight sm:text-4xl">
+          Your next customer is calling right now. Make sure they hear a human
+          — even when you can&apos;t.
+        </h2>
+        <Link
+          href="/onboarding"
+          className="mt-8 inline-flex items-center gap-2 rounded-full bg-white px-6 py-3 text-sm font-semibold text-[#007AFF] shadow-lg transition hover:bg-white/90 active:scale-[0.98]"
+        >
+          Get started in 2 minutes
+          <ArrowRight className="h-4 w-4" />
+        </Link>
+      </div>
+    </section>
+  );
+}
+
+function Footer() {
+  return (
+    <footer className="border-t border-separator">
+      <div className="mx-auto flex w-full max-w-6xl flex-col items-center justify-between gap-3 px-4 py-8 text-sm text-ink-3 sm:flex-row sm:px-6">
         <div className="flex items-center gap-2">
-          <Phone className="h-4 w-4 text-brand-400" />
-          <span className="font-semibold text-slate-300">CallFlow</span>
+          <Phone className="h-4 w-4 text-wire" />
+          <span className="font-semibold text-ink">CallFlow</span>
         </div>
-        <p>Missed calls, caught. Voicemails, logged.</p>
-      </footer>
-    </div>
+        <p>Missed calls, caught. Leads, booked.</p>
+        <p>© 2026 CallFlow</p>
+      </div>
+    </footer>
   );
 }

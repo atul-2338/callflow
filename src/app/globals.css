@@ -1,17 +1,54 @@
 @import "tailwindcss";
 
+/*
+ * CallFlow design tokens — iOS / Apple HIG light theme (build brief Phase 1B).
+ * Legacy dark-app ramps (brand / navy / surface / edge) are intentionally kept:
+ * the (app) route group still renders the pre-Phase-5 dark screens as islands.
+ */
+
 :root {
-  --background: #0f1117;
-  --foreground: #e2e8f0;
+  /* iOS system colors (light) */
+  --background: #f2f2f7; /* systemGroupedBackground */
+  --foreground: #1c1c1e; /* label */
+  --card: #ffffff; /* secondarySystemGroupedBackground */
+  --label-secondary: #6e6e73; /* secondaryLabel */
+  --label-tertiary: #8e8e93; /* tertiaryLabel */
+  --separator: rgba(60, 60, 67, 0.12);
+  --fill-quaternary: rgba(118, 118, 128, 0.12);
+
+  /* Brand semantics */
+  --wire: #007aff; /* iOS blue — primary action */
+  --wire-press: #0066d6;
+  --booked: #34c759; /* iOS green — success / appointment booked */
+  --callback: #ff9500; /* iOS orange — pending / callback */
+  --danger: #ff3b30; /* iOS red — missed / destructive */
+
+  --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.04), 0 8px 24px rgba(0, 0, 0, 0.06);
+  --shadow-pill: 0 4px 14px rgba(0, 122, 255, 0.32);
 }
 
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);
-  --font-sans: var(--font-inter), system-ui, sans-serif;
-  --font-mono: var(--font-inter), ui-monospace, monospace;
+  --color-card: var(--card);
+  --color-ink: var(--foreground);
+  --color-ink-2: var(--label-secondary);
+  --color-ink-3: var(--label-tertiary);
+  --color-separator: var(--separator);
 
-  /* Confident electric blue accent */
+  /* iOS semantic accents */
+  --color-wire: var(--wire);
+  --color-wire-press: var(--wire-press);
+  --color-booked: var(--booked);
+  --color-callback: var(--callback);
+  --color-danger: var(--danger);
+
+  --font-sans: -apple-system, BlinkMacSystemFont, "SF Pro Display",
+    "SF Pro Text", "Helvetica Neue", "Segoe UI", Roboto, var(--font-inter),
+    system-ui, sans-serif;
+  --font-mono: ui-monospace, "SF Mono", Menlo, monospace;
+
+  /* ---- LEGACY dark-app ramps — (app) group only, removed in Phase 5 ---- */
   --color-brand-50: #eff6ff;
   --color-brand-100: #dbeafe;
   --color-brand-200: #bfdbfe;
@@ -22,12 +59,9 @@
   --color-brand-700: #1d4ed8;
   --color-brand-800: #1e40af;
   --color-brand-900: #1e3a8a;
-
-  /* Surfaces (deep charcoal navy) */
   --color-surface: #11141c;
   --color-surface-2: #161a24;
   --color-edge: rgba(255, 255, 255, 0.08);
-
   --color-navy-50: #f0f4fb;
   --color-navy-100: #dbe4f5;
   --color-navy-200: #bccbea;
@@ -44,5 +78,75 @@
 body {
   background: var(--background);
   color: var(--foreground);
-  font-family: var(--font-sans), system-ui, sans-serif;
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+  letter-spacing: -0.01em;
 }
+
+/* Reusable iOS surfaces */
+.ios-card {
+  background: var(--card);
+  border-radius: 1.25rem;
+  box-shadow: var(--shadow-card);
+}
+
+.ios-pill-primary {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  border-radius: 9999px;
+  background: var(--wire);
+  color: #fff;
+  font-weight: 600;
+  box-shadow: var(--shadow-pill);
+  transition: background-color 150ms ease, transform 150ms ease;
+}
+.ios-pill-primary:hover {
+  background: var(--wire-press);
+}
+.ios-pill-primary:active {
+  transform: scale(0.98);
+}
+.ios-pill-primary:disabled {
+  background: var(--fill-quaternary);
+  color: var(--label-tertiary);
+  box-shadow: none;
+  cursor: not-allowed;
+}
+
+.ios-pill-secondary {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  border-radius: 9999px;
+  background: var(--card);
+  color: var(--wire);
+  font-weight: 600;
+  box-shadow: var(--shadow-card);
+  transition: background-color 150ms ease;
+}
+.ios-pill-secondary:hover {
+  background: #f5f5f7;
+}
+
+.ios-field {
+  width: 100%;
+  border-radius: 0.875rem;
+  border: 1px solid var(--separator);
+  background: var(--card);
+  padding: 0.875rem 1rem;
+  font-size: 1rem;
+  color: var(--foreground);
+  outline: none;
+  transition: border-color 150ms ease, box-shadow 150ms ease;
+}
+.ios-field::placeholder {
+  color: var(--label-tertiary);
+}
+.ios-field:focus {
+  border-color: var(--wire);
+  box-shadow: 0 0 0 3px rgba(0, 122, 255, 0.18);
+}
+
