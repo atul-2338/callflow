@@ -71,7 +71,6 @@ let failed = 0;
 
 console.log(`\n🧪 CallFlow IVR Test Suite — ${BASE_URL}\n`);
 console.log("─".repeat(60));
-
 for (const test of testCases) {
   try {
     const options = {
@@ -106,6 +105,67 @@ for (const test of testCases) {
     }
   }
 }
+
+// Onboarding end-to-end simulation (no real phone or Plivo needed):
+// start -> simulate the forwarded call landing on the Plivo number ->
+// status flips to "active".
+const SIM_PHONE = "+15550100100";
+const SIM_PHONE_TYPE = "android";
+
+async function runOnboardingSimulation() {
+  console.log("\n📞 Onboarding end-to-end simulation\n");
+
+  const startRes = await fetch(`${BASE_URL}/api/onboarding/start`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      phone_number: SIM_PHONE,
+      phone_type: SIM_PHONE_TYPE,
+    }),
+  });
+  const start = await startRes.json().catch(() => ({}));
+  if (startRes.status !== 200 || !start.businessId) {
+    failed++;
+    console.log(
+      `❌ onboarding start — HTTP ${startRes.status}: ${JSON.stringify(start).slice(0, 200)}`
+    );
+    return;
+  }
+  passed++;
+  console.log(
+    `✅ onboarding start — businessId ${start.businessId}, forward to ${start.plivo_number}`
+  );
+
+  const completeRes = await fetch(`${BASE_URL}/api/onboarding/complete`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ businessId: start.businessId }),
+  });
+  const complete = await completeRes.json().catch(() => ({}));
+  if (completeRes.status !== 200 || complete.forwarding_status !== "active") {
+    failed++;
+    console.log(
+      `❌ onboarding complete — HTTP ${completeRes.status}: ${JSON.stringify(complete).slice(0, 200)}`
+    );
+    return;
+  }
+  passed++;
+  console.log(`✅ onboarding complete — active, saved_at ${complete.saved_at}`);
+
+  const statusRes = await fetch(`${BASE_URL}/api/onboarding/status/${start.businessId}`);
+  const status = await statusRes.json().catch(() => ({}));
+  if (statusRes.status === 200 && status.forwarding_status === "active") {
+    passed++;
+    console.log(`✅ onboarding status — active (${status.phone_number})`);
+  } else {
+    failed++;
+    console.log(
+      `❌ onboarding status — expected active, got ${status.forwarding_status || statusRes.status}`
+    );
+  }
+}
+
+await runOnboardingSimulation();
 
 console.log("─".repeat(60));
 console.log(`\nResults: ${passed} passed, ${failed} failed\n`);

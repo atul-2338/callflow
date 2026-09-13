@@ -16,9 +16,13 @@
 # next.js
 /.next/
 /out/
+/dist/
 
 # production
 /build
+
+# call recordings (local audio files — never commit)
+/recordings/
 
 # misc
 .DS_Store
@@ -36,6 +40,12 @@ yarn-error.log*
 
 # local status report (contains real customer phone numbers — not for public repos)
 /project-status.log
+
+# local day job logs
+/worklog-*.md
+
+# local dev server capture
+/dev_server.log
 
 # local CRM data (contains Twilio credentials)
 /data/*.json

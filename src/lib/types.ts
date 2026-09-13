@@ -67,3 +67,36 @@ export interface Call {
   createdAt: string;
   updatedAt: string;
 }
+
+export const CARRIERS = [
+  "verizon",
+  "att",
+  "tmobile",
+  "other",
+  "airtel",
+  "jio",
+  "vi",
+] as const;
+
+export type Carrier = (typeof CARRIERS)[number];
+
+export const FORWARDING_STATUSES = [
+  "not_started",
+  "pending",
+  "active",
+  "failed",
+] as const;
+
+export type ForwardingStatus = (typeof FORWARDING_STATUSES)[number];
+
+export interface Business {
+  id: string;
+  phoneNumber: string;
+  carrier: Carrier;
+  forwardingStatus: ForwardingStatus;
+  lastVerifiedAt: string | null;
+  pendingVerificationFor: string | null;
+  pendingVerificationExpiresAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+}

@@ -56,7 +56,22 @@ CREATE TABLE IF NOT EXISTS calls (
   updatedAt TEXT NOT NULL
 );
 
+-- Call-forwarding onboarding/verification per business.
+CREATE TABLE IF NOT EXISTS businesses (
+  id TEXT PRIMARY KEY,
+  phoneNumber TEXT NOT NULL,
+  carrier TEXT NOT NULL DEFAULT 'other',
+  forwardingStatus TEXT NOT NULL DEFAULT 'not_started',
+  lastVerifiedAt TEXT,
+  pendingVerificationFor TEXT,
+  pendingVerificationExpiresAt TEXT,
+  createdAt TEXT NOT NULL,
+  updatedAt TEXT NOT NULL
+);
+
 CREATE INDEX IF NOT EXISTS idx_contacts_phone ON contacts(phone);
 CREATE INDEX IF NOT EXISTS idx_activity_contact ON activity_logs(contactId);
 CREATE INDEX IF NOT EXISTS idx_calls_status ON calls(callStatus);
 CREATE INDEX IF NOT EXISTS idx_calls_started ON calls(callStartedAt);
+CREATE INDEX IF NOT EXISTS idx_businesses_phone ON businesses(phoneNumber);
+CREATE INDEX IF NOT EXISTS idx_businesses_status ON businesses(forwardingStatus);

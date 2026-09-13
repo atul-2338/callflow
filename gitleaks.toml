@@ -1,0 +1,31 @@
+title = "callflow pre-commit secret scan"
+
+# Global allowlist: only safe file paths. (gitleaks 8.30.x has a bug with
+# multiple [rule.allowlist] tables, so we use a single global one.)
+[allowlist]
+description = "safe files to skip"
+paths = [
+  '''gitleaks\.toml''',
+  '''.env\.example$''',
+  '''package-lock\.json$''',
+]
+
+[[rules]]
+id = "generic-api-key"
+description = "Generic API key (sk-, gsk-, AKIA, AIza, xox)"
+regex = '''(sk-[A-Za-z0-9]{16,}|gsk_[A-Za-z0-9]{10,}|AKIA[0-9A-Z]{16}|AIza[0-9A-Za-z_-]{30,}|xox[baprs]-[0-9A-Za-z-]{10,})'''
+
+[[rules]]
+id = "private-key-block"
+description = "PEM private key block"
+regex = '''(-----BEGIN (RSA|EC|OPENSSH|DSA) PRIVATE KEY-----)'''
+
+[[rules]]
+id = "plivo-auth-id"
+description = "Plivo Auth ID (MA + 10+ digits)"
+regex = '''(MA[0-9]{10,})'''
+
+[[rules]]
+id = "plivo-auth-token"
+description = "Plivo Auth Token (MT + 32 hex)"
+regex = '''(MT[0-9a-f]{32})'''

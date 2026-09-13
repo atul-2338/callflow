@@ -1,11 +1,14 @@
 import { randomUUID } from "crypto";
 import type {
   ActivityLog,
+  Business,
   Call,
   CallStatus,
+  Carrier,
   ClientProfile,
   Contact,
   ContactStatus,
+  ForwardingStatus,
   Settings,
 } from "./types";
 import { getDb } from "./database";
@@ -334,4 +337,142 @@ export function normalizePhone(phone: string): string {
 export function toE164(phone: string): string {
   const cleaned = phone.replace(/[^\d+]/g, "");
   return cleaned.startsWith("+") ? cleaned : `+${cleaned}`;
+}
+
+// ---- Businesses (call-forwarding onboarding/verification) ----
+
+type BusinessRow = Omit<Business, "carrier" | "forwardingStatus"> & {
+  carrier: string;
+  forwardingStatus: string;
+};
+
+function mapBusiness(row: BusinessRow): Business {
+  return {
+    ...row,
+    carrier: row.carrier as Business["carrier"],
+    forwardingStatus: row.forwardingStatus as Business["forwardingStatus"],
+  };
+}
+
+export async function getBusinessById(
+  id: string
+): Promise<Business | undefined> {
+  const row = getDb()
+    .prepare("SELECT * FROM businesses WHERE id = ?")
+    .get(id) as BusinessRow | undefined;
+  return row ? mapBusiness(row) : undefined;
+}
+
+export async function getBusinessByPhone(
+  phone: string
+): Promise<Business | undefined> {
+  const normalized = normalizePhone(phone);
+  const rows = getDb()
+    .prepare("SELECT * FROM businesses")
+    .all() as unknown as BusinessRow[];
+  return rows.map(mapBusiness).find((b) => normalizePhone(b.phoneNumber) === normalized);
+}
+
+export async function createBusiness(
+  data: Omit<Business, "id" | "createdAt" | "updatedAt">
+): Promise<Business> {
+  const now = new Date().toISOString();
+  const business: Business = {
+    ...data,
+    id: randomUUID(),
+    createdAt: now,
+    updatedAt: now,
+  };
+  getDb()
+    .prepare(
+      `INSERT INTO businesses (
+         id, phoneNumber, carrier, forwardingStatus, lastVerifiedAt,
+         pendingVerificationFor, pendingVerificationExpiresAt, createdAt, updatedAt
+       ) VALUES (
+         @id, @phoneNumber, @carrier, @forwardingStatus, @lastVerifiedAt,
+         @pendingVerificationFor, @pendingVerificationExpiresAt, @createdAt, @updatedAt
+       )`
+    )
+    .run(business);
+  return business;
+}
+
+export async function updateBusiness(
+  id: string,
+  data: Partial<Omit<Business, "id" | "createdAt">>
+): Promise<Business | null> {
+  const existing = await getBusinessById(id);
+  if (!existing) return null;
+
+  const updated: Business = {
+    ...existing,
+    ...data,
+    updatedAt: new Date().toISOString(),
+  };
+  getDb()
+    .prepare(
+      `UPDATE businesses SET
+         phoneNumber = @phoneNumber, carrier = @carrier,
+         forwardingStatus = @forwardingStatus, lastVerifiedAt = @lastVerifiedAt,
+         pendingVerificationFor = @pendingVerificationFor,
+         pendingVerificationExpiresAt = @pendingVerificationExpiresAt,
+         updatedAt = @updatedAt
+       WHERE id = @id`
+    )
+    .run(updated);
+  return updated;
+}
+
+export async function getBusinessesByStatus(
+  status: ForwardingStatus
+): Promise<Business[]> {
+  const rows = getDb()
+    .prepare("SELECT * FROM businesses WHERE forwardingStatus = ?")
+    .all(status) as unknown as BusinessRow[];
+  return rows.map(mapBusiness);
+}
+
+export async function getAllBusinesses(): Promise<Business[]> {
+  const rows = getDb()
+    .prepare("SELECT * FROM businesses ORDER BY createdAt ASC")
+    .all() as unknown as BusinessRow[];
+  return rows.map(mapBusiness);
+}
+
+export async function setBusinessForwardingStatus(
+  id: string,
+  status: ForwardingStatus,
+  lastVerifiedAt?: string
+): Promise<Business | null> {
+  return updateBusiness(id, {
+    forwardingStatus: status,
+    lastVerifiedAt: lastVerifiedAt ?? null,
+  });
+}
+
+export async function setPendingVerification(
+  id: string,
+  phone: string,
+  expiresAt: string
+): Promise<Business | null> {
+  return updateBusiness(id, {
+    pendingVerificationFor: phone,
+    pendingVerificationExpiresAt: expiresAt,
+  });
+}
+
+export async function clearPendingVerification(id: string): Promise<Business | null> {
+  return updateBusiness(id, {
+    pendingVerificationFor: null,
+    pendingVerificationExpiresAt: null,
+  });
+}
+
+export async function getBusinessesByCarrier(
+  carrier: Carrier
+): Promise<Business[]> {
+  const rows = getDb()
+    .prepare("SELECT * FROM businesses WHERE carrier = ?")
+    .all(carrier) as unknown as BusinessRow[];
+  return rows.map(mapBusiness);
 }

@@ -68,12 +68,14 @@ export interface NotifyMissedCallResult {
   error?: string;
 }
 
-export async function notifyMissedCall(
+export async function sendPushNotification(
   fcmToken: string,
-  callerNumber: string
+  title: string,
+  body: string,
+  data?: Record<string, string>
 ): Promise<NotifyMissedCallResult> {
   if (!fcmToken) {
-    return { sent: false, error: "No FCM token configured for the business" };
+    return { sent: false, error: "No FCM token configured" };
   }
 
   const app = getFirebaseApp();
@@ -87,11 +89,8 @@ export async function notifyMissedCall(
   try {
     const messageId = await getMessaging(app).send({
       token: fcmToken,
-      notification: {
-        title: "Missed call",
-        body: `You missed a call from ${callerNumber}`,
-      },
-      data: { callerNumber },
+      notification: { title, body },
+      data: data ?? {},
     });
     return { sent: true, messageId };
   } catch (err) {
@@ -100,4 +99,16 @@ export async function notifyMissedCall(
       error: err instanceof Error ? err.message : "FCM send failed",
     };
   }
+}
+
+export async function notifyMissedCall(
+  fcmToken: string,
+  callerNumber: string
+): Promise<NotifyMissedCallResult> {
+  return sendPushNotification(
+    fcmToken,
+    "Missed call",
+    `You missed a call from ${callerNumber}`,
+    { callerNumber }
+  );
 }
