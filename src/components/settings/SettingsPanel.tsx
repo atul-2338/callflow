@@ -49,6 +49,9 @@ export default function SettingsPanel() {
   const [saved, setSaved] = useState(false);
 
   useEffect(() => {
+    // TODO(Phase 5): replace localStorage-backed panel with DB-backed settings;
+    // the effect-load avoids hydration mismatches with server-rendered defaults.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setInfo(load(STORAGE_INFO, DEFAULT_INFO));
     setPrefs(load(STORAGE_PREFS, { notifyEmail: true, notifySms: false }));
   }, []);

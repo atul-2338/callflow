@@ -5,7 +5,6 @@ import { useRouter } from "next/navigation";
 import { RefreshCw, Search, Users, X } from "lucide-react";
 import type { ActivityLog, Contact } from "@/lib/types";
 import { apiFetch } from "@/lib/api";
-import { isValidPhone } from "@/lib/util";
 import ContactForm from "./ContactForm";
 import ContactRow from "./ContactRow";
 
@@ -115,42 +114,8 @@ export default function ContactDashboard() {
     }
     const labels: Record<string, string> = {
       "log-call": "Call logged",
-      "send-sms": "SMS sent",
     };
     showToast("success", labels[action] || "Action completed");
-    refresh();
-  }
-
-  async function handleSimulateMissedCall() {
-    const phone = window.prompt(
-      "Enter phone number to simulate a missed call (E.164 format):\nExample: +919876543210"
-    );
-    if (!phone?.trim()) return;
-
-    if (!isValidPhone(phone)) {
-      showToast("error", "Phone number must be at least 10 digits.");
-      return;
-    }
-
-    const res = await fetch("/api/ivr/dial-result", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        DialCallStatus: "no-answer",
-        From: phone.trim(),
-        To: "+15551234567",
-        CallSid: `CA_sim_${Date.now()}`,
-      }),
-    });
-    const text = await res.text();
-    if (!res.ok) {
-      showToast("error", text || "Simulation failed");
-      return;
-    }
-    showToast(
-      "success",
-      "Missed call simulated — voicemail prompt returned and owner notified"
-    );
     refresh();
   }
 
@@ -229,12 +194,6 @@ export default function ContactDashboard() {
           />
         </div>
         <div className="flex gap-2">
-          <button
-            onClick={handleSimulateMissedCall}
-            className="flex items-center gap-2 rounded-lg border border-gold-500/30 bg-gold-500/10 px-4 py-2 text-sm font-medium text-gold-400 hover:bg-gold-500/20"
-          >
-            Simulate Missed Call
-          </button>
           <button
             onClick={refresh}
             className="flex items-center gap-2 rounded-lg border border-navy-600 px-4 py-2 text-sm font-medium text-slate-300 hover:bg-navy-800"

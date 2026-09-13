@@ -2,13 +2,10 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Inbox, LayoutDashboard, Phone, Radio, Settings } from "lucide-react";
+import { Phone, PhoneCall, Settings } from "lucide-react";
 
 const navItems = [
-  { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
-  { href: "/inbox", label: "Inbox", icon: Inbox },
-  { href: "/phone", label: "Phone", icon: Radio },
-  { href: "/dialer", label: "Dialer", icon: Phone },
+  { href: "/calls", label: "Calls", icon: PhoneCall },
   { href: "/settings", label: "Settings", icon: Settings },
 ];
 

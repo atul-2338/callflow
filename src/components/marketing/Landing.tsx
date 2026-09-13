@@ -104,8 +104,8 @@ export default function Landing() {
           <a href="#how-it-works" className="hidden hover:text-white sm:inline">
             How it works
           </a>
-          <Link href="/dashboard" className="hidden hover:text-white sm:inline">
-            Dashboard
+          <Link href="/setup" className="hidden hover:text-white sm:inline">
+            Get started
           </Link>
           <Link
             href="/setup"
@@ -140,7 +140,7 @@ export default function Landing() {
                 <ArrowRight className="h-4 w-4" />
               </Link>
               <Link
-                href="/dashboard"
+                href="/setup"
                 className="inline-flex items-center justify-center gap-2 rounded-lg border border-white/10 bg-white/5 px-6 py-3 text-sm font-semibold text-slate-200 transition-colors hover:bg-white/10"
               >
                 View demo dashboard

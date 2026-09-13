@@ -3,7 +3,6 @@
 import { useState } from "react";
 import {
   History,
-  MessageSquare,
   Pencil,
   Phone,
   PhoneMissed,
@@ -77,15 +76,6 @@ export default function ContactRow({
           >
             <Phone className="h-3.5 w-3.5" />
             {loading === "log-call" ? "..." : "Log Call"}
-          </button>
-          <button
-            onClick={() => handleAction("send-sms")}
-            disabled={loading !== null}
-            title="Send SMS"
-            className="inline-flex items-center gap-1 rounded-lg border border-gold-500/30 bg-gold-500/10 px-2.5 py-1.5 text-xs font-medium text-gold-400 hover:bg-gold-500/20 disabled:opacity-50"
-          >
-            <MessageSquare className="h-3.5 w-3.5" />
-            {loading === "send-sms" ? "..." : "SMS"}
           </button>
           <button
             onClick={() => onViewHistory(contact)}

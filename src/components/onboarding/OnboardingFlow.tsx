@@ -209,7 +209,7 @@ export default function OnboardingFlow() {
       </p>
       <div className="mt-8 flex w-full flex-col gap-3 sm:flex-row sm:justify-center">
         <Link
-          href="/dashboard"
+          href="/calls"
           className="inline-flex items-center justify-center gap-2 rounded-lg bg-brand-500 px-6 py-3 text-sm font-semibold text-white shadow-lg shadow-brand-500/20 transition-colors hover:bg-brand-400"
         >
           <Phone className="h-4 w-4" />

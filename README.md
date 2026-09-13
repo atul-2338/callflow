@@ -1,11 +1,14 @@
-# CallFlow — Call & Messaging CRM
+# CallFlow — Missed-Call Answering for Local Businesses
 
-A single-tenant call/messaging CRM that handles inbound calls with an in-call voicemail fallback. When someone calls your SignalWire number, the app dials the business owner; if the owner doesn't answer, the caller hears a voicemail prompt, and the business owner gets a Firebase push notification in parallel. Voicemails (with transcripts) and call history are stored locally.
+CallFlow forwards a business's missed calls to a Plivo number answered by a Dograh AI voice agent that books appointments. Call history, transcripts, and push notifications are stored/sent locally (SQLite + Firebase Cloud Messaging).
+
+> **Migration in progress (build brief Phase 1):** the legacy SignalWire IVR/SMS stack has been deleted. The Plivo forwarding flow and Dograh webhook integration land in Phases 3–4.
 
 ## Tech stack
 
 - **Next.js 16** (App Router, typed routes) + **React 19** + **TypeScript** (strict) + **Tailwind CSS 4**
-- **SignalWire** (`@signalwire/compatibility-api`) — voice IVR + SMS
+- **Plivo** — forwarding number + test calls (REST API via `src/lib/plivo.ts`)
+- **Dograh AI** — voice agent (webhook integration in Phase 4)
 - **Firebase Admin** (`firebase-admin`) — push notifications via FCM
 - **SQLite** (`better-sqlite3`) — persistent database (file location configurable via `DATABASE_PATH`)
 
@@ -24,11 +27,10 @@ Copy `.env.example` to `.env.local` and fill in real values:
 
 | Variable | Purpose |
 |---|---|
-| `SIGNALWIRE_PROJECT_ID` | SignalWire project ID |
-| `SIGNALWIRE_API_TOKEN` | SignalWire API token |
-| `SIGNALWIRE_SPACE_URL` | e.g. `https://your-space.signalwire.com` |
-| `SIGNALWIRE_FROM_NUMBER` | Your SignalWire number (E.164, e.g. `+18884956970`) |
-| `BUSINESS_OWNER_NUMBER` | Number inbound calls are forwarded to (leave empty for voicemail-only mode) |
+| `PLIVO_AUTH_ID` | Plivo auth ID (forwarding test calls — Phase 3) |
+| `PLIVO_AUTH_TOKEN` | Plivo auth token |
+| `PLIVO_NUMBER` | Your Plivo number (E.164) that missed calls forward to |
+| `PUBLIC_BASE_URL` | Public base URL of this app (webhooks must be reachable by Plivo/Dograh) |
 | `FIREBASE_SERVICE_ACCOUNT` | Firebase service account JSON — single-line or base64-encoded |
 | `APP_AUTH_TOKEN` | *Optional.* Shared secret to protect write APIs (leave empty to keep APIs open) |
 | `DATABASE_PATH` | *Optional.* Filesystem path to the SQLite database file. Defaults to `./data/callflow.db` locally. |
@@ -43,40 +45,18 @@ CallFlow stores all data (contacts, settings, client profile, activity logs, cal
 
 ### Local setup
 
-The schema is created automatically on first run. To import an existing `data/*.json` export into SQLite (one-time migration from the old JSON-file persistence):
-
-```bash
-npm run db:migrate
-```
-
-This reads `data/contacts.json`, `data/settings.json`, `data/client.json`, `data/activity.json`, and `data/calls.json` and imports them into the database at `DATABASE_PATH` (or the default `./data/callflow.db`). It is safe to run multiple times (uses upserts).
+The schema is created automatically on first run — there is no manual migration step. (The legacy `data/*.json` mock files and the one-time JSON→SQLite import script have been removed; SQLite is the single source of truth.)
 
 > The live `.db` file is gitignored — only `migrations/schema.sql` is committed. Never commit a database file.
 
-## SignalWire voice webhook (required for real calls)
+## Call flow (Plivo + Dograh)
 
-1. Expose localhost publicly (a bundled ngrok is included):
-   ```bash
-   tools\ngrok.exe http 3000
-   ```
-2. In the SignalWire dashboard, set your number's **Voice** webhook (incoming call handler) to:
-   ```
-   https://<your-ngrok-host>/api/ivr/incoming-call
-   ```
-   This must be set in the dashboard — it can't be done from code.
-
-## How the IVR flow works
-
-1. Inbound call → `/api/ivr/incoming-call` returns `<Dial timeout="20" action="/api/ivr/dial-result">` to `BUSINESS_OWNER_NUMBER`.
-2. `/api/ivr/dial-result` reads `DialCallStatus`:
-   - `completed` → empty `<Response>` (owner answered).
-   - otherwise → `<Say>` + `<Record maxLength="60" transcribe="true">`, and fires `notifyMissedCall()`.
-3. `/api/ivr/recording-complete` saves `RecordingUrl`, `TranscriptionText`, `From`, `CallSid` to the `calls` table (`status = "voicemail_left"`), returns `<Say>Thank you, goodbye.</Say><Hangup/>`.
+Coming in Phases 3–4 of the build brief: the business's carrier forwards missed calls (via the generated MMI/USSD code) to the Plivo number, Dograh's AI agent answers and books appointments, and an end-of-call webhook writes the `calls` table and fires an FCM push to the business owner.
 
 ## Push notifications (FCM)
 
-1. Paste the business owner's FCM device token in **Settings → Firebase Push Notifications**.
-2. On a missed call, the owner receives a push in parallel with the voicemail prompt.
+1. The business owner's FCM device token is stored via `POST /api/settings` (`fcmToken`); the new Settings surface ships in Phase 5.
+2. On a missed call, the owner receives a push notification (wired to the Dograh webhook in Phase 4).
 
 An FCM token is generated by the Firebase SDK running on a device/app. Until you build the mobile app, the fastest way to get one for testing is a small page using the Firebase Web SDK's `getToken()`.
 
@@ -85,7 +65,6 @@ An FCM token is generated by the Firebase SDK running on a device/app. Until you
 ```bash
 npm test             # unit tests (Vitest)
 npm run lint         # ESLint
-npm run test:webhook # IVR smoke suite (requires dev server running)
 npm run test:build   # production build
 ```
 
@@ -94,17 +73,14 @@ npm run test:build   # production build
 | Route | Method | Description |
 |---|---|---|
 | `/api/contacts` | GET/POST/PUT/DELETE | Contact CRUD |
-| `/api/contacts/[id]/actions` | POST | `log-call`, `send-sms` |
+| `/api/contacts/[id]/actions` | POST | `log-call` |
 | `/api/contacts/[id]/activity` | GET | Per-contact activity log |
-| `/api/settings` | GET/POST | Settings (SMS template, FCM token) |
+| `/api/settings` | GET/POST | Settings (reply template, FCM token) |
 | `/api/calls` | GET | Call log (`?status=&since=`) |
-| `/api/ivr/incoming-call` | POST | Voice webhook entry (Dial) |
-| `/api/ivr/dial-result` | POST | Dial outcome (Say+Record on miss) |
-| `/api/ivr/recording-complete` | POST | Save voicemail + hang up |
 
 ## Auth
 
-Write endpoints are protected by an optional bearer token. Set `APP_AUTH_TOKEN` in `.env.local` and paste the same value in **Settings → API Access Token**. Leave both empty to keep the API open (default).
+Write endpoints are protected by an optional bearer token. Set `APP_AUTH_TOKEN` in `.env.local` and send it as `Authorization: Bearer <token>` on write requests (the client helper in `src/lib/api.ts` does this automatically). Leave empty to keep the API open (default).
 
 ## Deploying to Render
 
@@ -112,11 +88,9 @@ Write endpoints are protected by an optional bearer token. Set `APP_AUTH_TOKEN` 
 
 | Variable | Notes |
 |---|---|
-| `SIGNALWIRE_PROJECT_ID` | Real SignalWire project ID |
-| `SIGNALWIRE_API_TOKEN` | Real SignalWire API token |
-| `SIGNALWIRE_SPACE_URL` | e.g. `https://your-space.signalwire.com` |
-| `SIGNALWIRE_FROM_NUMBER` | The business number hosted on SignalWire |
-| `BUSINESS_OWNER_NUMBER` | Owner's cell phone to forward calls to |
+| `PLIVO_AUTH_ID` / `PLIVO_AUTH_TOKEN` | Plivo credentials (Phase 3+) |
+| `PLIVO_NUMBER` | The Plivo number that receives forwarded missed calls |
+| `PUBLIC_BASE_URL` | Public URL of the Render service (must be reachable by webhooks) |
 | `FIREBASE_SERVICE_ACCOUNT` | Firebase service account JSON (single-line or base64) |
 | `DATABASE_PATH` | **Required in production.** Absolute path on the persistent disk mount (see below) |
 | `APP_AUTH_TOKEN` | Optional shared secret for write APIs |
@@ -138,10 +112,7 @@ The schema is created automatically on first boot — no manual migration step i
 - Start command: `npm start`
 - Node version: set `Node >= 22` (or use the repo's `engines` field).
 
-### SignalWire voice webhook
+### Plivo / Dograh webhooks
 
-After deploy, set the number's **Voice webhook** (incoming call handler) to:
-
-```
-https://<your-app-on-render>.onrender.com/api/ivr/incoming-call
-```
+After deploy, point the Plivo answer webhook and the Dograh end-of-call webhook at
+`https://<your-app-on-render>.onrender.com/...` (exact routes are wired in Phases 3–4; `PUBLIC_BASE_URL` must match).
