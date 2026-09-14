@@ -110,7 +110,139 @@ real UI.
 > localStorage.setItem("callflow_auth_token", "<your APP_AUTH_TOKEN>")
 > ```
 
-## Deploying to Render
+## Deploying to a VPS (current plan)
+
+Any 2 GB / 1 vCPU Ubuntu 24.04 box. This replaced Render because Render's free
+instance type has **no persistent disk**, and SQLite on an ephemeral filesystem
+loses every contact, call, and settings row on the first redeploy. The Render
+instructions below are kept as historical reference only.
+
+Everything lives in `deploy/`:
+
+| File | What it does |
+|---|---|
+| `vps-bootstrap.sh` | One-time: Node 24, `callflow` service user, `/var/data`, checkout at `/srv/callflow`, `.env` template, systemd + nginx units, 2 GB swap, UFW, nightly backup timer |
+| `vps-deploy.sh` | Every later release: fetch, `npm ci`, build, restart, health-check, **auto-rollback** if the checks fail |
+| `backup.sh` | `VACUUM INTO` snapshot (WAL-safe), daily/weekly retention |
+| `systemd/callflow.service` | Runs `next start -H 127.0.0.1 -p 3000` as `callflow` |
+| `systemd/callflow-backup.{service,timer}` | Nightly backup at 03:15, `Persistent=true` so a missed run catches up |
+| `nginx/callflow.conf` | Port-80 reverse proxy **only** — certbot adds the TLS server block itself |
+
+### Why systemd instead of PM2
+
+PM2's own restart-on-crash is redundant (`Restart=always` does it), and keeping
+PM2 alive across reboot requires `pm2 startup`, which generates a systemd unit
+anyway — so systemd ends up being the supervisor either way, with a PM2 daemon
+and a `~/.pm2/dump.pm2` process list in between that is easy to drift. A unit
+file is also declarative and version-controlled here, whereas `pm2 save` state
+is invisible to git. PM2's nicer logs are worth it for multi-app fleets; for one
+app, `journalctl -u callflow -f` is enough.
+
+`NODE_MAJOR` defaults to **24** to match `.node-version`; `package.json` requires
+`node >=22`. Pin 22 with `sudo NODE_MAJOR=22 bash deploy/vps-bootstrap.sh`.
+
+### Runbook
+
+**1. DNS.** At your registrar, point both records at the server IP and wait for
+them to resolve (`dig +short callflow.biz`):
+
+```
+A     @     <SERVER_IP>
+A     www   <SERVER_IP>
+```
+
+**2. Lock down SSH before anything is exposed.** As root:
+
+```bash
+adduser deploy
+usermod -aG sudo deploy
+rsync --archive --chown=deploy:deploy ~/.ssh /home/deploy   # from your laptop
+ufw allow OpenSSH
+ufw enable
+```
+
+Confirm `ssh deploy@<SERVER_IP>` works, **then** disable root/password login:
+
+```bash
+sudoedit /etc/ssh/sshd_config      # PermitRootLogin no, PasswordAuthentication no
+sudo systemctl restart ssh
+```
+
+Keep your existing root session open until the new one is proven to work.
+
+**3. Provision.** Clone the repo and run the bootstrap (it re-clones into
+`/srv/callflow` owned by the service user, so your clone location does not matter):
+
+```bash
+git clone https://github.com/atul-2338/callflow.git ~/callflow
+cd ~/callflow
+sudo bash deploy/vps-bootstrap.sh
+```
+
+For a private repo, export `REPO_URL` with a fine-grained PAT (read-only
+Contents) before running it — see the note in the script's clone step.
+
+The first run writes `/srv/callflow/.env` and **tells you to edit it**. Fill in
+the Plivo/Firebase values (see [Required environment variables](#required-environment-variables)),
+then re-run the same command; it is idempotent and will not overwrite your `.env`.
+
+**4. TLS.** Only after DNS points here:
+
+```bash
+sudo certbot --nginx -d callflow.biz -d www.callflow.biz
+```
+
+Choose the redirect option. certbot edits `sites-available/callflow.conf` in
+place, adding the HTTPS block — which is why that file ships HTTP-only.
+
+**5. Verify.**
+
+```bash
+systemctl status callflow --no-pager
+curl -i http://127.0.0.1:3000/pricing      # process is serving
+curl -i http://127.0.0.1:3000/api/contacts # 200 + JSON [] → guard satisfied, DB opened
+curl -I https://callflow.biz/pricing       # nginx + TLS end to end
+systemctl list-timers callflow-backup.timer
+```
+
+A `500` on `/api/contacts` naming `DATABASE_PATH` means the env file is missing
+or points inside the project directory.
+
+### Deploying a new version
+
+```bash
+sudo bash /srv/callflow/deploy/vps-deploy.sh
+```
+
+Refuses to run on a dirty tree, rebuilds, restarts, then gates on `/pricing` and
+`/api/contacts` both returning 200 — rolling back to the previous commit and
+rebuilding if either fails. Roll back by hand with
+`git -C /srv/callflow reset --hard <sha> && npm run build && systemctl restart callflow`.
+
+The `.env` and `/var/data/callflow.db` both survive every deploy: `.env` is
+gitignored, and the database sits outside the checkout.
+
+### Backups
+
+`backup.sh` runs nightly via the timer into `/var/backups/callflow/{daily,weekly}`.
+It uses SQLite's `VACUUM INTO` rather than copying the file, because the database
+runs in WAL mode — a plain `cp` of `callflow.db` misses whatever is still in
+`callflow.db-wal`, and restoring it later silently drops the most recent writes.
+
+**A backup on the same disk as the database is not a backup.** A VPS has no
+platform volume snapshots, so un-comment one of the rsync/S3/rclone lines at the
+bottom of `backup.sh`. Restore with:
+
+```bash
+gunzip -c /var/backups/callflow/daily/callflow-<date>.gz > /var/data/callflow.db
+sudo chown callflow:callflow /var/data/callflow.db && sudo systemctl restart callflow
+```
+
+## Deploying to Render (historical — not used)
+
+Render's free tier cannot host this app, because it has no persistent disk to put
+the SQLite file on. Everything in this section still describes the app's real
+env-var needs and is kept for reference.
 
 ### Required environment variables
 

@@ -1,0 +1,15 @@
+[Unit]
+Description=CallFlow SQLite backup (VACUUM INTO snapshot)
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/bash /srv/callflow/deploy/backup.sh
+# Runs as root on purpose: it must read /var/data/callflow.db and write
+# /var/backups/callflow, both owned by the service user's group at best. No
+# secrets are read, and the script writes only inside those two directories.
+IOSchedulingClass=idle
+Nice=10
+NoNewPrivileges=true
+PrivateTmp=true

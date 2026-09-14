@@ -1,0 +1,10 @@
+# Deployment artifacts MUST have LF line endings on the Linux server: a stray \r
+# breaks a bash shebang (`bad interpreter: /usr/bin/env bash^M`), and systemd
+# silently mis-parses unit files that use CRLF. This pins it regardless of each
+# developer's core.autocrlf setting.
+deploy/** text eol=lf
+*.sh      text eol=lf
+*.service text eol=lf
+
+# Everything else stays git's default (core.autocrlf) so this file does not
+# churn the whole working tree on the next checkout.

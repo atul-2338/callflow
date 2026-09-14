@@ -1,0 +1,47 @@
+[Unit]
+Description=CallFlow (Next.js production server)
+Documentation=https://github.com/atul-2338/callflow
+After=network-online.target
+Wants=network-online.target
+# Give up after 5 crashes in 60s instead of restart-looping forever, so a bad
+# deploy surfaces as "failed" rather than an endless 500 loop.
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
+[Service]
+Type=simple
+User=callflow
+Group=callflow
+WorkingDirectory=/srv/callflow
+
+# NODE_ENV=production is what arms the DATABASE_PATH guard in src/lib/database.ts.
+# Secrets live in /srv/callflow/.env, which Next reads itself on boot (verified:
+# BaseServer's constructor calls loadEnvConfig, and real env vars below win over
+# file values). Only NODE_ENV/HOST are injected here.
+Environment=NODE_ENV=production
+
+# Bind loopback ONLY — Nginx terminates TLS and proxies to us, so the app port is
+# never exposed to the internet. Note the explicit -H: `next start` honours PORT
+# from the environment but does NOT read HOSTNAME (the -H option has no .env()
+# binding in next/dist/bin/next), so without this flag the server binds 0.0.0.0.
+ExecStart=/usr/bin/node /srv/callflow/node_modules/next/dist/bin/next start -H 127.0.0.1 -p 3000
+
+Restart=always
+RestartSec=5
+KillSignal=SIGTERM
+TimeoutStopSec=30
+
+# Standard hardening. The only writable paths the app needs are its SQLite data
+# directory and a private /tmp; everything under /usr, /boot and /etc is read-only.
+NoNewPrivileges=true
+ProtectSystem=full
+ProtectHome=true
+PrivateTmp=true
+ProtectKernelTunables=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+ReadWritePaths=/var/data
+
+[Install]
+WantedBy=multi-user.target
