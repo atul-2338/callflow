@@ -30,10 +30,19 @@ Copy `.env.example` to `.env.local` and fill in real values:
 | `PLIVO_AUTH_ID` | Plivo auth ID (forwarding test calls — Phase 3) |
 | `PLIVO_AUTH_TOKEN` | Plivo auth token |
 | `PLIVO_NUMBER` | Your Plivo number (E.164) that missed calls forward to |
-| `PUBLIC_BASE_URL` | Public base URL of this app (webhooks must be reachable by Plivo/Dograh) |
 | `FIREBASE_SERVICE_ACCOUNT` | Firebase service account JSON — single-line or base64-encoded |
 | `APP_AUTH_TOKEN` | *Optional.* Shared secret to protect write APIs (leave empty to keep APIs open) |
-| `DATABASE_PATH` | *Optional.* Filesystem path to the SQLite database file. Defaults to `./data/callflow.db` locally. |
+| `DATABASE_PATH` | *Optional locally.* Filesystem path to the SQLite database file. Defaults to `./data/callflow.db`. **Required in production** — see [Deploying to Render](#deploying-to-render). |
+| `CORS_ORIGINS` | *Optional.* Comma-separated allowed origins for the API. Unset (or `*`) allows **any** origin. |
+| `DEBUG` | *Optional.* Set to `1`/`true` to enable verbose `debugLog()` output from `src/lib`. Off by default. |
+
+> `PUBLIC_BASE_URL` is still listed in `.env.example` but is **not read by any
+> code yet** — the webhook URLs that need it land with Plivo/Dograh in Phases
+> 3–4. Setting it today has no effect.
+
+Every variable above is read at **runtime**, never at build time. There are no
+`NEXT_PUBLIC_*` variables, so nothing is baked into the client bundle and the
+production build succeeds with no environment variables set at all.
 
 ## Database (SQLite)
 
@@ -41,7 +50,9 @@ CallFlow stores all data (contacts, settings, client profile, activity logs, cal
 
 - **Schema:** `migrations/schema.sql` (applied automatically at startup via `CREATE TABLE IF NOT EXISTS`).
 - **Default location:** `./data/callflow.db`.
-- **Override:** set `DATABASE_PATH` to point the database elsewhere.
+- **Override:** set `DATABASE_PATH` to point the database elsewhere — **required in
+  production**, where a missing or project-local value is now rejected outright
+  (see [Deploying to Render](#deploying-to-render)).
 
 ### Local setup
 
@@ -80,7 +91,24 @@ npm run test:build   # production build
 
 ## Auth
 
-Write endpoints are protected by an optional bearer token. Set `APP_AUTH_TOKEN` in `.env.local` and send it as `Authorization: Bearer <token>` on write requests (the client helper in `src/lib/api.ts` does this automatically). Leave empty to keep the API open (default).
+Write endpoints accept an optional bearer token: if `APP_AUTH_TOKEN` is set, a
+matching `Authorization: Bearer <token>` header is required on writes. **If
+`APP_AUTH_TOKEN` is unset or empty, every write endpoint is open to the public
+internet** — `isAuthorized()` returns `true` unconditionally.
+
+**Current launch decision:** ship with `APP_AUTH_TOKEN` unset, accepting open
+write APIs, because of the client-side gap below. Revisit this when auth gets a
+real UI.
+
+> **Known gap before you enable this in production.** `src/lib/api.ts` reads the
+> token from `localStorage` key `callflow_auth_token`, but no UI currently calls
+> `setAuthToken()`. If you set `APP_AUTH_TOKEN`, the dashboard's own writes will
+> start failing with `401` until you seed that key manually from the browser
+> console:
+>
+> ```js
+> localStorage.setItem("callflow_auth_token", "<your APP_AUTH_TOKEN>")
+> ```
 
 ## Deploying to Render
 
@@ -88,12 +116,13 @@ Write endpoints are protected by an optional bearer token. Set `APP_AUTH_TOKEN` 
 
 | Variable | Notes |
 |---|---|
+| `DATABASE_PATH` | **Required.** Absolute path on the persistent disk mount (see below). If omitted, relative, or pointed inside the project directory, the app **refuses to open the database** and every DB route returns 500 with an explanatory error — no silent data loss. |
+| `CORS_ORIGINS` | Comma-separated list of your own origins, e.g. `https://callflow.biz,https://www.callflow.biz`. **Unset means `*`** (any site may call the API). Origins must match exactly, no trailing slash; the app's own pages are same-origin so need no entry. Limits browser JS from other sites only — it is not a substitute for auth. |
+| `APP_AUTH_TOKEN` | Leave **unset** at launch — setting it breaks dashboard writes until the client-side token gap is fixed. See [Auth](#auth). |
 | `PLIVO_AUTH_ID` / `PLIVO_AUTH_TOKEN` | Plivo credentials (Phase 3+) |
 | `PLIVO_NUMBER` | The Plivo number that receives forwarded missed calls |
-| `PUBLIC_BASE_URL` | Public URL of the Render service (must be reachable by webhooks) |
 | `FIREBASE_SERVICE_ACCOUNT` | Firebase service account JSON (single-line or base64) |
-| `DATABASE_PATH` | **Required in production.** Absolute path on the persistent disk mount (see below) |
-| `APP_AUTH_TOKEN` | Optional shared secret for write APIs |
+| `PUBLIC_BASE_URL` | Not read by any code yet — set it for future webhook use (Phases 3–4); harmless today |
 
 ### Why `DATABASE_PATH` must point to a persistent disk
 
@@ -106,11 +135,116 @@ You must:
 
 The schema is created automatically on first boot — no manual migration step is required in production (there is no legacy JSON to import).
 
-### Build & start
+**Guard in place.** `dbPathPolicyError()` in `src/lib/database.ts` rejects any
+production configuration that would lose data: `DATABASE_PATH` unset, relative, or
+pointing inside the project directory. Verified locally against a production
+`npm start` build:
+
+| Config | `/`, `/pricing` | DB routes (`/api/contacts`, `/api/settings`, `/api/calls`) |
+|---|---|---|
+| `DATABASE_PATH` unset | `200` | `500`, plus `[database] DATABASE_PATH must be set in production…` in the service log |
+| `DATABASE_PATH` absolute and outside the project dir | `200` | `200` — schema is auto-created on first access |
+
+Two cases the guard cannot catch, so still verify after deploying:
+
+- **Disk not attached / not mounted where you said** → `mkdirSync` throws on first
+  access, so DB routes return **500** while marketing pages still return `200`.
+  The deploy reports **green** either way (all API routes are dynamic and nothing
+  touches SQLite during `next build`), so check the request log, not just the
+  deploy status.
+- **A writable path that is not the persistent disk** (e.g. `/tmp/callflow.db`) →
+  passes the guard, and the data still vanishes on redeploy. Only you know which
+  mount is durable.
+
+Attach the disk **before** the first deploy, then confirm `callflow.db` (plus
+`-wal`/`-shm`) appears under the mount after the first write.
+
+### Order of operations (this is the trap to avoid)
+
+Configuring the disk *after* the first deploy is what produces a service that looks
+healthy while every DB route 500s. Render kicks off the initial deploy the moment
+you click **Create**, so put the disk and the env vars in the **Advanced** section
+of the creation form itself:
+
+1. **New → Web Service**, connect the repo, pick the region closest to your users.
+2. Compute plan: any **paid** plan (see the constraint table below), and keep
+   instances at **1**.
+3. **Advanced → Environment Variables**: add `DATABASE_PATH` and `CORS_ORIGINS`
+   (values below) *before* creating. Env vars added later need a fresh deploy.
+4. **Advanced → Persistent Disk**: mount path `/var/data`, smallest size you can
+   pick (you can grow it later, but never shrink it).
+5. **Create Web Service** — the first boot now has a durable path to write to.
+6. **Advanced → Health check path** (optional): `/pricing`. It is static and never
+   touches SQLite, so it cannot mask a DB problem — and it cannot fail for one
+   either. Do **not** point a health check at an `/api/*` route.
+
+If the service already exists and DB routes return 500: add the disk + env vars
+under **Settings**, then **Trigger Deploy**. Nothing needs cleaning up — the guard
+means the bad config never created a database inside the project directory.
+
+### Disk & instance constraints (from Render's own docs)
+
+| Constraint | Consequence for this app |
+|---|---|
+| Persistent disks attach only to **paid** services | Free tier has no disk option, so `DATABASE_PATH` has nowhere durable to point. Never launch on free. |
+| Free instances wipe local files on redeploy **and** serve `Disallow: /` in `robots.txt` while spun down | Two independent reasons a free deploy is a build test only, not a live site. |
+| A disk is reachable by **one instance only**, and not during the build | Matches SQLite WAL's single-writer rule. Nothing in this app touches the DB at build time (all DB routes are dynamic), which is why the build passes even with a broken DB path. |
+| Attaching a disk disables zero-downtime deploys | A few seconds of unavailability per deploy; the swap exists to stop two versions writing one disk. |
+
+Mount at `/var/data` — an absolute path outside the build directory
+(`/opt/render/project/src`). Render validates the mount-path field in the
+dashboard; if it ever refuses a path, pick another outside the build directory and
+point `DATABASE_PATH` at it (our guard independently rejects any path *inside* the
+project, since that directory is replaced on every deploy).
+
+### Copy-paste env values for the first deploy
+
+Only these two are needed to run the site. Everything else is optional and fails
+soft when absent (Plivo and Firebase are checked lazily and only affect calls and
+push notifications, never boot):
+
+```
+DATABASE_PATH=/var/data/callflow.db
+CORS_ORIGINS=https://callflow.biz,https://www.callflow.biz
+```
+
+- **Do not set `PORT`** — Render injects it (default `10000`) and `next start`
+  honours it.
+- **Leave `APP_AUTH_TOKEN` unset** at launch (see [Auth](#auth)).
+- `www` is in the list because both hostnames will resolve to this one service;
+  origins must match *exactly* (no trailing slashes). `http://localhost:3000` is
+  deliberately **not** here: the dashboard calls `/api/...` on its own origin, so
+  local dev is same-origin and needs no CORS entry. Add it only if you later run a
+  separate local frontend against the production API, and remove it afterwards.
+
+### Backups
+
+Render takes daily disk snapshots, but a snapshot is only restorable to this
+service's disk — and there is **no second copy** anywhere: `*.db` is gitignored, so
+the database is never in the repository. Note also that SQLite in WAL mode keeps
+live data in three files, so a snapshot must cover all of them, and copying only
+`callflow.db` while `-wal` holds recent writes loses them:
+
+```
+/var/data/callflow.db
+/var/data/callflow.db-wal
+/var/data/callflow.db-shm
+```
+
+
 
 - Build command: `npm install && npm run build`
 - Start command: `npm start`
-- Node version: set `Node >= 22` (or use the repo's `engines` field).
+- Node version: pinned by `.node-version` at the repo root, which **takes
+  precedence over `engines` on Render**. `engines.node` is `>=22` (an unbounded
+  range, which Render resolves to the newest available Node), so `.node-version`
+  is what keeps production deterministic. `better-sqlite3` v13 uses N-API
+  prebuilds (`linux-x64`, `linuxmusl-x64`), so no compiler/buildpack step is
+  needed.
+- `npm start` honours Render's injected `PORT` and binds all interfaces — no
+  `-H`/`--hostname` flag or `HOSTNAME` variable is required.
+- Keep the service at **one instance**. SQLite runs in WAL mode, which relies on
+  a local `-shm` file and is unsafe across multiple instances sharing a disk.
 
 ### Public pages (pricing, refunds, terms, privacy)
 
