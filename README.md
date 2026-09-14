@@ -112,6 +112,41 @@ The schema is created automatically on first boot — no manual migration step i
 - Start command: `npm start`
 - Node version: set `Node >= 22` (or use the repo's `engines` field).
 
+### Public pages (pricing, refunds, terms, privacy)
+
+The pages a payment provider's merchant review looks for live in the
+`(marketing)` route group and are **fully static** — no client JS, no auth, and
+no environment variables, so they build and serve even before Plivo / Dograh /
+Firebase / Dodo secrets exist:
+
+| Route | File |
+|---|---|
+| `/pricing` | `src/app/(marketing)/pricing/page.tsx` |
+| `/refund-policy` | `src/app/(marketing)/refund-policy/page.tsx` |
+| `/terms` | `src/app/(marketing)/terms/page.tsx` |
+| `/privacy` | `src/app/(marketing)/privacy/page.tsx` |
+
+Shared header/footer come from `src/components/marketing/SiteChrome.tsx` (the
+footer links all four pages and shows the support address
+`atul@callflow.biz`); the legal body layout comes from
+`src/components/marketing/PolicyPage.tsx`. Keep these links reachable from `/` —
+reviewers crawl the homepage to find them.
+
+### Custom domain (`callflow.biz`)
+
+In the Render dashboard: **Your service → Settings → Custom Domains → Add
+Custom Domain**, then enter `callflow.biz` and `www.callflow.biz`. Render shows
+the exact target values; at the registrar:
+
+| Host | Type | Value |
+|---|---|---|
+| `@` | A | `216.24.57.1` (Render's apex load balancer — confirm in dashboard) |
+| `www` | CNAME | the `<service>.onrender.com` value Render displays |
+
+Remove any existing `AAAA` records for `@` and `www` (Render's IPv6 addresses are
+not usable as CNAME targets), leave TTL on auto/default, and let Render finish
+issuing the certificate before pointing `PUBLIC_BASE_URL` at the domain.
+
 ### Plivo / Dograh webhooks
 
 After deploy, point the Plivo answer webhook and the Dograh end-of-call webhook at

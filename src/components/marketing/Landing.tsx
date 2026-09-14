@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { SiteFooter } from "@/components/marketing/SiteChrome";
 import {
   ArrowRight,
   Bell,
@@ -102,28 +103,28 @@ export default function Landing() {
       <Reviews />
       <TrustStrip />
       <FinalCta />
-      <Footer />
+      <SiteFooter />
     </main>
   );
 }
 
 function Header() {
   return (
-    <header className="sticky top-0 z-40 border-b border-separator bg-white/80 backdrop-blur">
+    <header className="sticky top-0 z-40 border-b border-white/10 bg-[#071a36]/85 backdrop-blur">
       <div className="mx-auto flex w-full max-w-6xl items-center justify-between px-4 py-3.5 sm:px-6">
         <div className="flex items-center gap-2.5">
-          <div className="flex h-9 w-9 items-center justify-center rounded-[10px] bg-wire text-white shadow-[var(--shadow-pill)]">
+          <div className="flex h-9 w-9 items-center justify-center rounded-[10px] bg-gold text-[#0b1f3a] shadow-[var(--shadow-pill)]">
             <Phone className="h-4.5 w-4.5" />
           </div>
-          <span className="text-lg font-semibold tracking-tight text-ink">
+          <span className="text-lg font-semibold tracking-tight text-foreground">
             CallFlow
           </span>
         </div>
-        <nav className="flex items-center gap-5 text-sm font-medium text-ink-2">
-          <a href="#how" className="hidden hover:text-ink sm:inline">
+        <nav className="flex items-center gap-5 text-sm font-medium text-white/70">
+          <a href="#how" className="hidden hover:text-white sm:inline">
             How it works
           </a>
-          <a href="#pricing" className="hidden hover:text-ink sm:inline">
+          <a href="#pricing" className="hidden hover:text-white sm:inline">
             Pricing
           </a>
           <Link href="/onboarding" className="ios-pill-primary px-4 py-2 text-sm">
@@ -138,13 +139,13 @@ function Header() {
 function Hero() {
   return (
     <section className="mx-auto w-full max-w-3xl px-4 pb-12 pt-16 text-center sm:pt-24">
-      <span className="inline-flex items-center rounded-full bg-wire/10 px-3.5 py-1.5 text-xs font-semibold text-wire">
+      <span className="inline-flex items-center rounded-full bg-gold/15 px-3.5 py-1.5 text-xs font-semibold text-gold">
         AI answering for local businesses
       </span>
-      <h1 className="mt-5 text-4xl font-bold leading-[1.08] tracking-tight text-ink sm:text-6xl">
+      <h1 className="mt-5 text-4xl font-bold leading-[1.08] tracking-tight text-foreground sm:text-6xl">
         Never miss another call.
       </h1>
-      <p className="mx-auto mt-5 max-w-2xl text-lg leading-relaxed text-ink-2">
+      <p className="mx-auto mt-5 max-w-2xl text-lg leading-relaxed text-white/75">
         CallFlow answers your business&apos;s missed calls with an AI
         receptionist that takes messages, answers FAQs, and books
         appointments — then pings your phone. Set up in two minutes.
@@ -239,10 +240,10 @@ function Stats() {
 function HowItWorks() {
   return (
     <section id="how" className="mx-auto w-full max-w-6xl px-4 py-20 sm:px-6">
-      <h2 className="text-center text-3xl font-bold tracking-tight text-ink sm:text-4xl">
+      <h2 className="text-center text-3xl font-bold tracking-tight text-foreground sm:text-4xl">
         From missed call to booked job
       </h2>
-      <p className="mx-auto mt-3 max-w-xl text-center text-base leading-relaxed text-ink-2">
+      <p className="mx-auto mt-3 max-w-xl text-center text-base leading-relaxed text-white/70">
         Three steps. No hardware. No apps for your customers.
       </p>
       <div className="mt-12 grid gap-5 md:grid-cols-3">
@@ -268,10 +269,10 @@ function HowItWorks() {
 function Pricing() {
   return (
     <section id="pricing" className="mx-auto w-full max-w-6xl px-4 pb-20 sm:px-6">
-      <h2 className="text-center text-3xl font-bold tracking-tight text-ink sm:text-4xl">
+      <h2 className="text-center text-3xl font-bold tracking-tight text-foreground sm:text-4xl">
         Simple pricing
       </h2>
-      <p className="mx-auto mt-3 max-w-xl text-center text-base text-ink-2">
+      <p className="mx-auto mt-3 max-w-xl text-center text-base text-white/70">
         One plan. Try it free for 3 days — you pay nothing today.
       </p>
       <div className="ios-card mx-auto mt-10 max-w-md p-8">
@@ -304,7 +305,14 @@ function Pricing() {
           <ArrowRight className="h-4 w-4" />
         </Link>
         <p className="mt-3 text-center text-xs text-ink-3">
-          No charge today. Cancel anytime before day 3.
+          No charge today. Cancel anytime before day 3. Full details on our{" "}
+          <Link
+            href="/pricing"
+            className="font-semibold text-wire underline underline-offset-2"
+          >
+            pricing page
+          </Link>
+          .
         </p>
       </div>
     </section>
@@ -329,10 +337,10 @@ function Stars({ count }: { count: number }) {
 function Reviews() {
   return (
     <section className="mx-auto w-full max-w-6xl px-4 pb-20 sm:px-6">
-      <h2 className="text-center text-3xl font-bold tracking-tight text-ink sm:text-4xl">
+      <h2 className="text-center text-3xl font-bold tracking-tight text-foreground sm:text-4xl">
         Trusted by local businesses
       </h2>
-      <p className="mx-auto mt-3 max-w-xl text-center text-base text-ink-2">
+      <p className="mx-auto mt-3 max-w-xl text-center text-base text-white/70">
         Plumbers, salons, clinics, and contractors across the US never miss a
         lead.
       </p>
@@ -354,8 +362,8 @@ function Reviews() {
             </figcaption>
           </figure>
         ))}
-        <div className="flex flex-col items-center justify-center rounded-2xl border-2 border-dashed border-separator bg-white/50 p-6 text-center">
-          <p className="text-sm font-medium text-ink-2">
+        <div className="flex flex-col items-center justify-center rounded-2xl border-2 border-dashed border-white/25 bg-white/5 p-6 text-center">
+          <p className="text-sm font-medium text-white/70">
             Your business could be here
           </p>
           <Link
@@ -373,12 +381,12 @@ function Reviews() {
 
 function TrustStrip() {
   return (
-    <section className="border-y border-separator bg-white/60">
+    <section className="border-y border-white/10 bg-white/[0.04]">
       <div className="mx-auto flex w-full max-w-6xl flex-wrap items-center justify-center gap-x-10 gap-y-3 px-4 py-8 sm:px-6">
         {trustBadges.map((b) => (
           <span
             key={b}
-            className="flex items-center gap-2 text-sm font-medium text-ink-2"
+            className="flex items-center gap-2 text-sm font-medium text-white/75"
           >
             <CheckCircle2 className="h-4 w-4 text-booked" />
             {b}
@@ -392,7 +400,7 @@ function TrustStrip() {
 function FinalCta() {
   return (
     <section className="mx-auto w-full max-w-6xl px-4 py-20 sm:px-6">
-      <div className="rounded-3xl bg-gradient-to-br from-[#0A84FF] to-[#0050C8] p-10 text-center text-white shadow-[0_20px_60px_rgba(0,122,255,0.35)] sm:p-16">
+      <div className="rounded-3xl bg-gradient-to-br from-[#0A84FF] to-[#00378F] p-10 text-center text-white shadow-[0_20px_60px_rgba(0,80,200,0.45)] ring-1 ring-gold/50 sm:p-16">
         <Bot className="mx-auto h-10 w-10" />
         <h2 className="mx-auto mt-4 max-w-2xl text-3xl font-bold tracking-tight sm:text-4xl">
           Your next customer is calling right now. Make sure they hear a human
@@ -400,27 +408,12 @@ function FinalCta() {
         </h2>
         <Link
           href="/onboarding"
-          className="mt-8 inline-flex items-center gap-2 rounded-full bg-white px-6 py-3 text-sm font-semibold text-[#007AFF] shadow-lg transition hover:bg-white/90 active:scale-[0.98]"
+          className="mt-8 inline-flex items-center gap-2 rounded-full bg-gold px-6 py-3 text-sm font-semibold text-[#0b1f3a] shadow-[var(--shadow-pill)] transition hover:bg-gold-strong active:scale-[0.98]"
         >
           Get started in 2 minutes
           <ArrowRight className="h-4 w-4" />
         </Link>
       </div>
     </section>
-  );
-}
-
-function Footer() {
-  return (
-    <footer className="border-t border-separator">
-      <div className="mx-auto flex w-full max-w-6xl flex-col items-center justify-between gap-3 px-4 py-8 text-sm text-ink-3 sm:flex-row sm:px-6">
-        <div className="flex items-center gap-2">
-          <Phone className="h-4 w-4 text-wire" />
-          <span className="font-semibold text-ink">CallFlow</span>
-        </div>
-        <p>Missed calls, caught. Leads, booked.</p>
-        <p>© 2026 CallFlow</p>
-      </div>
-    </footer>
   );
 }
