@@ -14,11 +14,18 @@ User=callflow
 Group=callflow
 WorkingDirectory=/srv/callflow
 
-# NODE_ENV=production is what arms the DATABASE_PATH guard in src/lib/database.ts.
-# Secrets live in /srv/callflow/.env, which Next reads itself on boot (verified:
-# BaseServer's constructor calls loadEnvConfig, and real env vars below win over
-# file values). Only NODE_ENV/HOST are injected here.
+# NODE_ENV=production alone does NOT arm the DATABASE_PATH guard: that would
+# break any legitimate production run on a persistent disk (this VPS, and
+# laptops testing `npm start`). The guard fires in production only on hosts known
+# to wipe the app disk on redeploy, or when DB_REQUIRE_PERSISTENT_PATH=1 is set.
+# This unit sets the flag deliberately, so a missing/relative/in-repo
+# DATABASE_PATH in /srv/callflow/.env fails loudly instead of stranding data.
 Environment=NODE_ENV=production
+Environment=DB_REQUIRE_PERSISTENT_PATH=1
+
+# Secrets live in /srv/callflow/.env, which Next reads itself on boot (verified:
+# BaseServer's constructor calls loadEnvConfig). Real environment variables above
+# always win over values of the same name in that file.
 
 # Bind loopback ONLY — Nginx terminates TLS and proxies to us, so the app port is
 # never exposed to the internet. Note the explicit -H: `next start` honours PORT

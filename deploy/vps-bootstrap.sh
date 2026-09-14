@@ -67,8 +67,10 @@ if ! id -u "$APP_USER" >/dev/null 2>&1; then
   adduser --system --group --home "$APP_DIR" --shell /usr/sbin/nologin "$APP_USER"
 fi
 
-# The database must live OUTSIDE $APP_DIR: src/lib/database.ts refuses to open it
-# in production if DATABASE_PATH is inside the project directory.
+# The database must live OUTSIDE $APP_DIR. The DATABASE_PATH guard in
+# src/lib/database.ts is armed on this host by DB_REQUIRE_PERSISTENT_PATH=1 in
+# deploy/systemd/callflow.service, so a missing or in-repo path fails loudly on the
+# first DB request instead of stranding data inside the checkout.
 echo "==> 4/9  Data directory ${DATA_DIR}"
 mkdir -p "$DATA_DIR"
 chown "${APP_USER}:${APP_USER}" "$DATA_DIR"
@@ -148,6 +150,9 @@ echo
 echo "Local check (should print 200, proxied nothing yet):"
 curl -sS -o /dev/null -w '  app      -> %{http_code}\n' "http://127.0.0.1:3000/pricing"
 curl -sS -o /dev/null -w '  via 80   -> %{http_code}\n' -H "Host: ${DOMAIN}" "http://127.0.0.1/pricing"
+# Touches SQLite, so this is the one that proves DATABASE_PATH is both set and
+# durable. A 500 here while the two above are 200 means the guard rejected the path.
+curl -sS -o /dev/null -w '  db api   -> %{http_code}\n' "http://127.0.0.1:3000/api/contacts"
 echo "  DB routes must return 200. If they 500 with 'DATABASE_PATH', see README.md."
 
 if [[ "$RUN_CERTBOT" == "1" ]]; then

@@ -32,7 +32,8 @@ Copy `.env.example` to `.env.local` and fill in real values:
 | `PLIVO_NUMBER` | Your Plivo number (E.164) that missed calls forward to |
 | `FIREBASE_SERVICE_ACCOUNT` | Firebase service account JSON — single-line or base64-encoded |
 | `APP_AUTH_TOKEN` | *Optional.* Shared secret to protect write APIs (leave empty to keep APIs open) |
-| `DATABASE_PATH` | *Optional locally.* Filesystem path to the SQLite database file. Defaults to `./data/callflow.db`. **Required in production** — see [Deploying to Render](#deploying-to-render). |
+| `DATABASE_PATH` | Filesystem path to the SQLite database file. Defaults to `./data/callflow.db` — fine locally and on any host with a real disk. **Required on hosts that wipe the app disk on redeploy** (Render / Vercel / Fly / Heroku / Kubernetes, auto-detected) or whenever `DB_REQUIRE_PERSISTENT_PATH=1` is set — see [Deploying to a VPS](#deploying-to-a-vps-current-plan). |
+| `DB_REQUIRE_PERSISTENT_PATH` | *Optional.* Set to `1` to arm the `DATABASE_PATH` guard on a host the app cannot auto-detect. `deploy/systemd/callflow.service` sets it, so the VPS fails loudly on a bad path. |
 | `CORS_ORIGINS` | *Optional.* Comma-separated allowed origins for the API. Unset (or `*`) allows **any** origin. |
 | `DEBUG` | *Optional.* Set to `1`/`true` to enable verbose `debugLog()` output from `src/lib`. Off by default. |
 
@@ -50,9 +51,11 @@ CallFlow stores all data (contacts, settings, client profile, activity logs, cal
 
 - **Schema:** `migrations/schema.sql` (applied automatically at startup via `CREATE TABLE IF NOT EXISTS`).
 - **Default location:** `./data/callflow.db`.
-- **Override:** set `DATABASE_PATH` to point the database elsewhere — **required in
-  production**, where a missing or project-local value is now rejected outright
-  (see [Deploying to Render](#deploying-to-render)).
+- **Override:** set `DATABASE_PATH` to point the database elsewhere. The app
+  rejects a missing or project-local value **only where that would actually lose
+  data** — on hosts that rebuild the app disk on every deploy (auto-detected) or
+  when `DB_REQUIRE_PERSISTENT_PATH=1` is set. See
+  [Why `DATABASE_PATH` must point to a persistent disk](#why-database_path-must-point-to-a-persistent-disk).
 
 ### Local setup
 
@@ -205,8 +208,27 @@ curl -I https://callflow.biz/pricing       # nginx + TLS end to end
 systemctl list-timers callflow-backup.timer
 ```
 
-A `500` on `/api/contacts` naming `DATABASE_PATH` means the env file is missing
-or points inside the project directory.
+A `500` on `/api/contacts` naming `DATABASE_PATH` means the env file is missing or
+points inside the project directory — the systemd unit exports
+`DB_REQUIRE_PERSISTENT_PATH=1`, so the guard is armed on this host even though a VPS
+is not one of the auto-detected ephemeral platforms.
+
+### Running production mode locally
+
+`npm run build && npm start` needs **no** `DATABASE_PATH` and no extra flags: with
+`NODE_ENV=production` on an unrecognised host the guard stays off, the app logs one
+warning naming the file it chose, and everything serves from `./data/callflow.db`.
+To rehearse the VPS behaviour (or Render's) on the same build, set the trigger
+explicitly:
+
+```bash
+DB_REQUIRE_PERSISTENT_PATH=1 npm start   # VPS unit does this
+RENDER=1 npm start                       # what Render's boot looks like
+```
+
+Either one makes every DB route return `500` until `DATABASE_PATH` points outside
+the checkout — which is exactly the failure you want to see locally rather than on a
+live deploy.
 
 ### Deploying a new version
 
@@ -248,7 +270,7 @@ env-var needs and is kept for reference.
 
 | Variable | Notes |
 |---|---|
-| `DATABASE_PATH` | **Required.** Absolute path on the persistent disk mount (see below). If omitted, relative, or pointed inside the project directory, the app **refuses to open the database** and every DB route returns 500 with an explanatory error — no silent data loss. |
+| `DATABASE_PATH` | **Required on Render.** Absolute path on the persistent disk mount (see below). Render sets `RENDER=1`, which arms the guard: if the value is omitted, relative, or inside the project directory, the app **refuses to open the database** and every DB route returns 500 with an explanatory error — no silent data loss. |
 | `CORS_ORIGINS` | Comma-separated list of your own origins, e.g. `https://callflow.biz,https://www.callflow.biz`. **Unset means `*`** (any site may call the API). Origins must match exactly, no trailing slash; the app's own pages are same-origin so need no entry. Limits browser JS from other sites only — it is not a substitute for auth. |
 | `APP_AUTH_TOKEN` | Leave **unset** at launch — setting it breaks dashboard writes until the client-side token gap is fixed. See [Auth](#auth). |
 | `PLIVO_AUTH_ID` / `PLIVO_AUTH_TOKEN` | Plivo credentials (Phase 3+) |
@@ -268,14 +290,20 @@ You must:
 The schema is created automatically on first boot — no manual migration step is required in production (there is no legacy JSON to import).
 
 **Guard in place.** `dbPathPolicyError()` in `src/lib/database.ts` rejects any
-production configuration that would lose data: `DATABASE_PATH` unset, relative, or
-pointing inside the project directory. Verified locally against a production
-`npm start` build:
+configuration that would lose data — `DATABASE_PATH` unset, relative, or pointing
+inside the project directory — and `requiresPersistentDbPath()` decides *when* that
+rule is enforced: automatically when a platform that rebuilds the app disk is
+detected (`RENDER`, `VERCEL`, `FLY_APP_NAME`, `DYNO`,
+`KUBERNETES_SERVICE_HOST`), or manually via `DB_REQUIRE_PERSISTENT_PATH=1`.
+Detection is deliberately positive, so an unknown host never fails at boot; that is
+what makes a local `npm start` or a VPS work without the variable. Verified locally
+against a production `npm start` build (same `.next` output, three boots):
 
-| Config | `/`, `/pricing` | DB routes (`/api/contacts`, `/api/settings`, `/api/calls`) |
+| Boot config | `/`, `/pricing` | DB routes (`/api/contacts`, `/api/settings`, `/api/calls`) |
 |---|---|---|
-| `DATABASE_PATH` unset | `200` | `500`, plus `[database] DATABASE_PATH must be set in production…` in the service log |
-| `DATABASE_PATH` absolute and outside the project dir | `200` | `200` — schema is auto-created on first access |
+| `NODE_ENV=production`, unrecognised host, `DATABASE_PATH` unset | `200` | `200` from `./data/callflow.db`, plus one `[database] … guard is off` warning |
+| `RENDER=1` (or `DB_REQUIRE_PERSISTENT_PATH=1`), `DATABASE_PATH` unset | `200` | `500`, plus `[database] DATABASE_PATH must be set in production…` in the service log |
+| Guard armed + `DATABASE_PATH` absolute and outside the project dir | `200` | `200` — schema is auto-created on first access |
 
 Two cases the guard cannot catch, so still verify after deploying:
 

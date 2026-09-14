@@ -28,22 +28,63 @@ function isInsideDir(child: string, parent: string): boolean {
 export interface DbPathPolicyInput {
   /** Raw `process.env.DATABASE_PATH`, trimmed. */
   configuredPath: string | undefined;
-  /** Effective database path the app would open. */
+  /** Effective database file the app would open. */
   resolvedPath: string;
   nodeEnv: string | undefined;
   projectDir: string;
+  /**
+   * Whether the host's app filesystem is wiped by a redeploy. The policy only
+   * hard-fails when this is true — see {@link requiresPersistentDbPath}.
+   */
+  requirePersistent: boolean;
+}
+
+/**
+ * Env vars that only exist on hosts which rebuild the app filesystem from
+ * scratch on every deploy (Render, Vercel, Fly.io, Heroku, Kubernetes). Their
+ * presence is what turns an ephemeral database path into silent data loss.
+ */
+const EPHEMERAL_PLATFORM_ENV = [
+  "RENDER",
+  "VERCEL",
+  "FLY_APP_NAME",
+  "DYNO",
+  "KUBERNETES_SERVICE_HOST",
+] as const;
+
+function isTruthyEnv(value: string | undefined): boolean {
+  const v = value?.trim();
+  return !!v && v.toLowerCase() !== "false";
+}
+
+/**
+ * True when this process is known to run on storage that a redeploy destroys,
+ * so the database must live on an explicit persistent mount.
+ *
+ * Detection is deliberately positive: an unrecognised host is treated as
+ * ordinary storage rather than failing the app at boot. Set
+ * `DB_REQUIRE_PERSISTENT_PATH=1` to enforce the rule on a host that is not
+ * auto-detected (for example the VPS, whose path lives outside the repo but
+ * which should still fail loudly if misconfigured).
+ */
+export function requiresPersistentDbPath(
+  env: Record<string, string | undefined> = process.env
+): boolean {
+  if (isTruthyEnv(env.DB_REQUIRE_PERSISTENT_PATH)) return true;
+  return EPHEMERAL_PLATFORM_ENV.some((key) => isTruthyEnv(env[key]));
 }
 
 /**
  * Returns an actionable error message when the given configuration would put
  * the database on storage that is destroyed by a redeploy, or `null` when it is
- * safe. Production is the only environment that hard-fails: locally the
- * fallback default is expected and only warned about.
+ * safe. Only hosts with ephemeral app storage hard-fail; running a production
+ * build on a machine with a real disk (a laptop test behind a tunnel, a VPS)
+ * must keep working with the default `./data/callflow.db`.
  */
 export function dbPathPolicyError(input: DbPathPolicyInput): string | null {
-  const { configuredPath, resolvedPath, nodeEnv, projectDir } = input;
+  const { configuredPath, resolvedPath, nodeEnv, projectDir, requirePersistent } = input;
 
-  if (nodeEnv !== "production") return null;
+  if (nodeEnv !== "production" || !requirePersistent) return null;
 
   if (!configuredPath) {
     return (
@@ -77,21 +118,34 @@ export function dbPathPolicyError(input: DbPathPolicyInput): string | null {
 /** Throws with {@link dbPathPolicyError}'s message when a deploy would lose data. */
 export function assertPersistentDbPath(dbPath: string): void {
   const configured = process.env.DATABASE_PATH?.trim();
+  const requirePersistent = requiresPersistentDbPath();
 
   const error = dbPathPolicyError({
     configuredPath: configured,
     resolvedPath: dbPath,
     nodeEnv: process.env.NODE_ENV,
     projectDir: process.cwd(),
+    requirePersistent,
   });
   if (error) throw new Error(`[database] ${error}`);
 
-  if (!configured) {
+  if (configured) return;
+
+  if (process.env.NODE_ENV === "production") {
+    // Reached only when no ephemeral host was detected, so the safety net is
+    // inactive here. Say so loudly instead of failing silently on a real deploy.
     console.warn(
-      `[database] DATABASE_PATH is not set; using the local default ${dbPath}. ` +
-        "This path is wiped on every deploy — set DATABASE_PATH in production."
+      `[database] NODE_ENV=production without DATABASE_PATH; using ${dbPath}. ` +
+        "No known-ephemeral platform was detected, so the DATABASE_PATH guard is " +
+        "off. Set DB_REQUIRE_PERSISTENT_PATH=1 to enforce it on this host."
     );
+    return;
   }
+
+  console.warn(
+    `[database] DATABASE_PATH is not set; using the local default ${dbPath}. ` +
+      "This path is wiped on every deploy — set DATABASE_PATH in production."
+  );
 }
 
 export function getDb(): Database.Database {
