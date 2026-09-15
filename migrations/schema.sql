@@ -52,6 +52,12 @@ CREATE TABLE IF NOT EXISTS calls (
   signalwireCallSid TEXT,
   recordingUrl TEXT,
   transcript TEXT,
+  dograhRunId TEXT,
+  dograhDeliveryId TEXT,
+  outcome TEXT,
+  customerName TEXT,
+  calendarEventId TEXT,
+  transcriptUrl TEXT,
   createdAt TEXT NOT NULL,
   updatedAt TEXT NOT NULL
 );
@@ -75,3 +81,12 @@ CREATE INDEX IF NOT EXISTS idx_calls_status ON calls(callStatus);
 CREATE INDEX IF NOT EXISTS idx_calls_started ON calls(callStartedAt);
 CREATE INDEX IF NOT EXISTS idx_businesses_phone ON businesses(phoneNumber);
 CREATE INDEX IF NOT EXISTS idx_businesses_status ON businesses(forwardingStatus);
+
+-- Dograh webhook idempotency keys. Partial unique indexes so legacy rows
+-- (NULL keys) never collide, and duplicate webhook deliveries are rejected at
+-- the storage layer, not just in handler code.
+CREATE UNIQUE INDEX IF NOT EXISTS idx_calls_dograh_run ON calls(dograhRunId)
+  WHERE dograhRunId IS NOT NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_calls_dograh_delivery ON calls(dograhDeliveryId)
+  WHERE dograhDeliveryId IS NOT NULL;
+

@@ -50,6 +50,22 @@ export const CALL_STATUSES = [
 
 export type CallStatus = (typeof CALL_STATUSES)[number];
 
+/** Normalized Callflow outcome derived from the Dograh call disposition.
+ * - booked:   the agent booked an appointment
+ * - callback: the caller asked to be called back
+ * - voicemail: a voicemail was captured/transcribed
+ * - handled:  the agent answered/handled the call without booking
+ * - other:    anything we could not map */
+export const CALL_OUTCOMES = [
+  "booked",
+  "callback",
+  "voicemail",
+  "handled",
+  "other",
+] as const;
+
+export type CallOutcome = (typeof CALL_OUTCOMES)[number];
+
 export interface Call {
   id: string;
   businessId: string | null;
@@ -64,9 +80,19 @@ export interface Call {
   signalwireCallSid: string | null;
   recordingUrl: string | null;
   transcript: string | null;
+  /** Dograh workflow run id — idempotency key for webhook ingestion. */
+  dograhRunId: string | null;
+  /** X-Dograh-Delivery-Id of the delivery that created this row. */
+  dograhDeliveryId: string | null;
+  outcome: CallOutcome | null;
+  customerName: string | null;
+  calendarEventId: string | null;
+  /** Public Dograh URL for the call transcript JSON file. */
+  transcriptUrl: string | null;
   createdAt: string;
   updatedAt: string;
 }
+
 
 export const CARRIERS = [
   "verizon",

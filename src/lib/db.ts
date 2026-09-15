@@ -3,6 +3,7 @@ import type {
   ActivityLog,
   Business,
   Call,
+  CallOutcome,
   CallStatus,
   Carrier,
   ClientProfile,
@@ -11,6 +12,7 @@ import type {
   ForwardingStatus,
   Settings,
 } from "./types";
+import { CALL_OUTCOMES } from "./types";
 import { getDb } from "./database";
 
 const DEFAULT_SETTINGS: Settings = {
@@ -20,9 +22,10 @@ const DEFAULT_SETTINGS: Settings = {
 };
 
 type ContactRow = Omit<Contact, "status"> & { status: string };
-type CallRow = Omit<Call, "callStatus" | "textBackSent"> & {
+type CallRow = Omit<Call, "callStatus" | "textBackSent" | "outcome"> & {
   callStatus: string;
   textBackSent: number;
+  outcome: string | null;
 };
 
 function mapContact(row: ContactRow): Contact {
@@ -34,6 +37,9 @@ function mapCall(row: CallRow): Call {
     ...row,
     callStatus: row.callStatus as Call["callStatus"],
     textBackSent: Boolean(row.textBackSent),
+    outcome: CALL_OUTCOMES.includes(row.outcome as CallOutcome)
+      ? (row.outcome as CallOutcome)
+      : "other",
   };
 }
 
@@ -255,11 +261,15 @@ export async function addCall(
          id, businessId, callerNumber, businessNumber, callStatus,
          callStartedAt, callEndedAt, durationSeconds, textBackSent,
          textBackSentAt, signalwireCallSid, recordingUrl, transcript,
+         dograhRunId, dograhDeliveryId, outcome, customerName,
+         calendarEventId, transcriptUrl,
          createdAt, updatedAt
        ) VALUES (
          @id, @businessId, @callerNumber, @businessNumber, @callStatus,
          @callStartedAt, @callEndedAt, @durationSeconds, @textBackSent,
          @textBackSentAt, @signalwireCallSid, @recordingUrl, @transcript,
+         @dograhRunId, @dograhDeliveryId, @outcome, @customerName,
+         @calendarEventId, @transcriptUrl,
          @createdAt, @updatedAt
        )`
     )
@@ -313,6 +323,25 @@ export async function getCallBySignalwireSid(
   const row = getDb()
     .prepare("SELECT * FROM calls WHERE signalwireCallSid = ?")
     .get(signalwireCallSid) as CallRow | undefined;
+  return row ? mapCall(row) : null;
+}
+
+/** Dograh webhook idempotency lookups (backed by partial unique indexes). */
+export async function getCallByDograhRunId(runId: string): Promise<Call | null> {
+  if (!runId) return null;
+  const row = getDb()
+    .prepare("SELECT * FROM calls WHERE dograhRunId = ?")
+    .get(runId) as CallRow | undefined;
+  return row ? mapCall(row) : null;
+}
+
+export async function getCallByDograhDeliveryId(
+  deliveryId: string
+): Promise<Call | null> {
+  if (!deliveryId) return null;
+  const row = getDb()
+    .prepare("SELECT * FROM calls WHERE dograhDeliveryId = ?")
+    .get(deliveryId) as CallRow | undefined;
   return row ? mapCall(row) : null;
 }
 

@@ -2,7 +2,7 @@
 
 CallFlow forwards a business's missed calls to a Plivo number answered by a Dograh AI voice agent that books appointments. Call history, transcripts, and push notifications are stored/sent locally (SQLite + Firebase Cloud Messaging).
 
-> **Migration in progress (build brief Phase 1):** the legacy SignalWire IVR/SMS stack has been deleted. The Plivo forwarding flow and Dograh webhook integration land in Phases 3–4.
+> **Migration in progress (build brief Phase 1):** the legacy SignalWire IVR/SMS stack has been deleted. The **Dograh end-of-call webhook is live** (`POST /api/webhooks/dograh`, see [Call flow](#call-flow-plivo--dograh)); Plivo forwarding verification and the rest of the Phase 5 UI are still landing.
 
 ## Tech stack
 
@@ -30,7 +30,9 @@ Copy `.env.example` to `.env.local` and fill in real values:
 | `PLIVO_AUTH_ID` | Plivo auth ID (forwarding test calls — Phase 3) |
 | `PLIVO_AUTH_TOKEN` | Plivo auth token |
 | `PLIVO_NUMBER` | Your Plivo number (E.164) that missed calls forward to |
+| `DOGRAH_WEBHOOK_SECRET` | Shared secret the Dograh webhook node sends to `/api/webhooks/dograh` (header `X-Callflow-Secret`, `Authorization: Bearer`, or `?key=`). Unset = endpoint is open. |
 | `FIREBASE_SERVICE_ACCOUNT` | Firebase service account JSON — single-line or base64-encoded |
+
 | `APP_AUTH_TOKEN` | *Optional.* Shared secret to protect write APIs (leave empty to keep APIs open) |
 | `DATABASE_PATH` | Filesystem path to the SQLite database file. Defaults to `./data/callflow.db` — fine locally and on any host with a real disk. **Required on hosts that wipe the app disk on redeploy** (Render / Vercel / Fly / Heroku / Kubernetes, auto-detected) or whenever `DB_REQUIRE_PERSISTENT_PATH=1` is set — see [Deploying to a VPS](#deploying-to-a-vps-current-plan). |
 | `DB_REQUIRE_PERSISTENT_PATH` | *Optional.* Set to `1` to arm the `DATABASE_PATH` guard on a host the app cannot auto-detect. `deploy/systemd/callflow.service` sets it, so the VPS fails loudly on a bad path. |
@@ -65,7 +67,117 @@ The schema is created automatically on first run — there is no manual migratio
 
 ## Call flow (Plivo + Dograh)
 
-Coming in Phases 3–4 of the build brief: the business's carrier forwards missed calls (via the generated MMI/USSD code) to the Plivo number, Dograh's AI agent answers and books appointments, and an end-of-call webhook writes the `calls` table and fires an FCM push to the business owner.
+A business's carrier forwards missed calls to the Plivo number; Dograh's AI
+agent answers and books appointments. At end of call the workflow's **send
+webhook** node POSTs the result to Callflow, which writes the `calls` row and
+pushes an FCM notification to the business owner.
+
+### Webhook contract (verified against Dograh source)
+
+- The body is a **user-authored template** in the webhook node — Dograh's
+  renderer **stringifies every value**, so nested dicts arrive as JSON-encoded
+  strings and numbers as strings. Callflow's parser (`src/lib/dograh.ts`)
+  accepts both forms.
+- Delivery is durable and **retried up to 5×** with backoff, then
+  dead-lettered. Each retry regenerates `X-Dograh-Delivery-Id` while the run id
+  stays stable, so Callflow dedupes on both (`dograhRunId` /
+  `dograhDeliveryId`, backed by partial unique indexes in `migrations/schema.sql`).
+- The webhook node supports **custom headers** → auth rides on
+  `X-Callflow-Secret`; `Authorization: Bearer` and `?key=` also work.
+- Telephony runs carry `caller_number` / `called_number` / `direction` in
+  `initial_context`; outcomes in `gathered_context` (`call_disposition`, plus
+  the platform-normalized `mapped_call_disposition`).
+- `recording_url` / `transcript_url` are Dograh public-download links (302 to
+  signed storage URLs). The transcript is a JSON file; Callflow flattens it to
+  `Caller:` / `Agent:` lines and stores it in `calls.transcript`.
+
+### Dograh workflow configuration
+
+In the workflow's end-of-call **send webhook** node set:
+
+- **URL**: `https://<your-host>/api/webhooks/dograh`
+- **Method**: `POST`
+- **Custom headers**: `X-Callflow-Secret: <DOGRAH_WEBHOOK_SECRET>` and `Content-Type: application/json`
+- **Body** — paste as-is (every key is optional; the parser falls back to the
+  nested contexts):
+
+```json
+{
+  "workflow_run_id": "{{workflow_run_id}}",
+  "workflow_name": "{{workflow_name}}",
+  "call_time": "{{call_time}}",
+  "direction": "{{initial_context.direction}}",
+  "caller_number": "{{initial_context.caller_number}}",
+  "called_number": "{{initial_context.called_number}}",
+  "call_disposition": "{{gathered_context.call_disposition}}",
+  "mapped_call_disposition": "{{gathered_context.mapped_call_disposition}}",
+  "duration_seconds": "{{cost_info.call_duration_seconds}}",
+  "recording_url": "{{recording_url}}",
+  "transcript_url": "{{transcript_url}}",
+  "customer_name": "{{gathered_context.customer_name}}",
+  "calendar_event_id": "{{gathered_context.calendar_event_id}}",
+  "initial_context": "{{initial_context}}",
+  "gathered_context": "{{gathered_context}}"
+}
+```
+
+### Disposition → outcome mapping
+
+| Dograh disposition (case/space/dash-insensitive) | Callflow `outcome` |
+|---|---|
+| `appointment_booked`, `api_booked`, `booking_confirmed` | `booked` |
+| `callback_requested`, `request_callback` | `callback` |
+| `voicemail_detected`, `voicemail_left` | `voicemail` (`callStatus: voicemail_left`) |
+| `answered`, `information_provided`, `transferred`, … | `handled` |
+| anything unknown / future codes | `other` (never rejected) |
+
+### Business matching (pilot)
+
+Forwarded calls arrive with `called_number` = the **Plivo number**, not the
+business's own line, so matching is deliberately conservative:
+
+1. exact hit on `businesses.phoneNumber` (normalized) → that business;
+2. exactly **one** business exists and either `PLIVO_NUMBER` is unset or equals
+   `called_number` → that business;
+3. otherwise the call is stored with `businessId = NULL` — nothing is silently
+   dropped, and responses show `matchedBusiness: false`.
+
+### Testing without a real call
+
+```bash
+# Full pipeline (parse → dedupe → match → DB write → push) via fixtures:
+curl -X POST http://localhost:3000/api/webhooks/dograh/test \
+  -H "Content-Type: application/json" -d '{"fixture":"booked"}'
+# fixtures: booked | callback | voicemail | handled | unmatched
+
+# Idempotency proof — run twice, second response has "duplicate": true:
+curl -X POST http://localhost:3000/api/webhooks/dograh/test \
+  -H "Content-Type: application/json" \
+  -d '{"fixture":"booked","workflow_run_id":"replay-1"}'
+```
+
+The response echoes `callId`, `matchedBusiness`, `outcome`, `transcriptStored`
+and the `push` result (e.g. `{"sent":false,"error":"No FCM token configured"}`)
+— verify persistence with `GET /api/calls`. `npm test` covers the same paths
+against a real temp SQLite (`src/lib/dograh.test.ts`,
+`src/lib/dograh-webhook.test.ts`).
+
+
+## Dashboard (`/app`)
+
+The iOS-styled (light) pilot dashboard lives at **`/app`** — separate from the
+legacy dark `(app)` screens until the Phase 5 rebuild retires them. It reads
+`GET /api/calls` and shows:
+
+- **Today at a glance** — booked / callback / voicemail counts for the current day;
+- **Outcome filter pills** — all, booked, callback, voicemail, handled, other;
+- **Call list** — customer name (from `gathered_context`) or caller number,
+  friendly timestamp ("Today, 3:42 PM"), duration, colored outcome pill, and a
+  tap-to-expand panel with the flattened transcript, recording link, and
+  calendar event id.
+
+`GET /api/calls` also accepts `?outcome=booked` (returns `400` for unknown
+values) in addition to the existing `?status=` / `?since=` filters.
 
 ## Push notifications (FCM)
 
@@ -91,6 +203,9 @@ npm run test:build   # production build
 | `/api/contacts/[id]/activity` | GET | Per-contact activity log |
 | `/api/settings` | GET/POST | Settings (reply template, FCM token) |
 | `/api/calls` | GET | Call log (`?status=&since=`) |
+| `/api/webhooks/dograh` | POST | Dograh end-of-call webhook (auth via `DOGRAH_WEBHOOK_SECRET`) |
+| `/api/webhooks/dograh/test` | POST | Fire the full webhook pipeline with a fixture payload (auth via `APP_AUTH_TOKEN`) |
+
 
 ## Auth
 

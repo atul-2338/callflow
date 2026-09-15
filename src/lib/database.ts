@@ -148,6 +148,38 @@ export function assertPersistentDbPath(dbPath: string): void {
   );
 }
 
+/**
+ * Columns added to `calls` after the initial release. `CREATE TABLE IF NOT
+ * EXISTS` in schema.sql never patches an existing table, and the Dograh
+ * idempotency indexes at the bottom of schema.sql reference these columns —
+ * so on a pre-existing database they must be ALTERed in *before* the schema is
+ * exec'd. On a fresh database (no `calls` table yet) this is a no-op and
+ * schema.sql creates the complete table.
+ */
+const CALL_ADDED_COLUMNS: ReadonlyArray<readonly [string, string]> = [
+  ["dograhRunId", "TEXT"],
+  ["dograhDeliveryId", "TEXT"],
+  ["outcome", "TEXT"],
+  ["customerName", "TEXT"],
+  ["calendarEventId", "TEXT"],
+  ["transcriptUrl", "TEXT"],
+];
+
+function migrateCallsTable(db: Database.Database): void {
+  const table = db
+    .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'calls'")
+    .get();
+  if (!table) return;
+  const existing = new Set(
+    (db.pragma("table_info(calls)") as Array<{ name: string }>).map((c) => c.name)
+  );
+  for (const [name, type] of CALL_ADDED_COLUMNS) {
+    if (!existing.has(name)) {
+      db.exec(`ALTER TABLE calls ADD COLUMN ${name} ${type}`);
+    }
+  }
+}
+
 export function getDb(): Database.Database {
   if (db) return db;
 
@@ -159,9 +191,12 @@ export function getDb(): Database.Database {
   instance.pragma("journal_mode = WAL");
   instance.pragma("foreign_keys = ON");
 
+  migrateCallsTable(instance);
+
   const schema = fs.readFileSync(SCHEMA_PATH, "utf-8");
   instance.exec(schema);
 
   db = instance;
-  return instance;
+  return db;
 }
+
