@@ -1,5 +1,6 @@
 import {
   addCall,
+  clearBusinessFcmToken,
   getAllBusinesses,
   getBusinessByPhone,
   getBusinessFcmToken,
@@ -14,7 +15,7 @@ import {
   isDograhRequestAuthorized,
   type HeaderReader,
 } from "./dograh";
-import { sendPushNotification } from "./firebase";
+import { sendPushNotification, type NotifyMissedCallResult } from "./firebase";
 import { getPlivoConfig } from "./plivo";
 import type { CallOutcome } from "./types";
 
@@ -83,6 +84,13 @@ export async function handleDograhWebhook(opts: {
   searchParams?: URLSearchParams;
   /** Injectable for tests: Dograh public transcript URLs need a real run. */
   fetchTranscript?: (url: string) => Promise<string | null>;
+  /** Injectable for tests: real FCM sends need a Firebase project. */
+  sendPush?: (
+    fcmToken: string,
+    title: string,
+    body: string,
+    data?: Record<string, string>
+  ) => Promise<NotifyMissedCallResult>;
 }): Promise<DograhWebhookResult> {
   const { body, headers } = opts;
   const searchParams = opts.searchParams ?? new URLSearchParams();
@@ -171,18 +179,24 @@ export async function handleDograhWebhook(opts: {
 
   const fcmToken = await getBusinessFcmToken();
   const who = event.customerName || event.callerNumber || "Unknown caller";
-  const push = fcmToken
-    ? await sendPushNotification(
-        fcmToken,
-        PUSH_TITLES[event.outcome],
-        `${who} — tap to review the call`,
-        {
-          callId: call.id,
-          outcome: event.outcome,
-          callerNumber: event.callerNumber,
-        }
-      )
+  const sendPush = opts.sendPush ?? sendPushNotification;
+  const push: NotifyMissedCallResult = fcmToken
+    ? await sendPush(fcmToken, PUSH_TITLES[event.outcome], `${who} — tap to review the call`, {
+        callId: call.id,
+        outcome: event.outcome,
+        callerNumber: event.callerNumber,
+      })
     : { sent: false, error: "No FCM token configured" };
+
+  // FCM says the token itself is dead (app uninstalled / token rotated):
+  // forget it so later deliveries skip the push step instead of hammering a
+  // registration that will never answer. The device re-registers via
+  // POST /api/settings. Transient failures (network, quota) leave it in place.
+  let pushTokenCleared = false;
+  if (fcmToken && push.invalidToken) {
+    await clearBusinessFcmToken();
+    pushTokenCleared = true;
+  }
 
   return {
     status: 200,
@@ -195,6 +209,7 @@ export async function handleDograhWebhook(opts: {
       outcome: call.outcome,
       transcriptStored: Boolean(transcript),
       push,
+      pushTokenCleared,
     },
   };
 }

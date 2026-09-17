@@ -66,6 +66,24 @@ export interface NotifyMissedCallResult {
   sent: boolean;
   messageId?: string;
   error?: string;
+  /** True when FCM rejected the token itself — the device uninstalled the
+   * app or the token was rotated. The stored token is permanently dead and
+   * the caller should clear it (see clearBusinessFcmToken). */
+  invalidToken?: boolean;
+}
+
+/** FCM HTTP v1 error codes that mean the registration token will never work
+ * again (firebase-admin wraps them on the thrown FcmError as `.code`). The
+ * legacy_* spellings are kept because older error mappings surface them. */
+const DEAD_FCM_TOKEN_CODES = new Set([
+  "messaging/unregistered",
+  "messaging/registration-token-not-registered",
+  "messaging/invalid-registration-token",
+]);
+
+export function isDeadFcmTokenError(err: unknown): boolean {
+  const code = (err as { code?: unknown } | null)?.code;
+  return typeof code === "string" && DEAD_FCM_TOKEN_CODES.has(code.toLowerCase());
 }
 
 export async function sendPushNotification(
@@ -97,6 +115,7 @@ export async function sendPushNotification(
     return {
       sent: false,
       error: err instanceof Error ? err.message : "FCM send failed",
+      invalidToken: isDeadFcmTokenError(err),
     };
   }
 }

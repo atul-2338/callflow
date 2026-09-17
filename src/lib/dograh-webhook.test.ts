@@ -251,3 +251,81 @@ describe("handleDograhWebhook — rejection paths", () => {
   });
 });
 
+describe("handleDograhWebhook — push token lifecycle", () => {
+  function fireWithPush(runId: string, sendPush: NonNullable<Parameters<typeof handleDograhWebhook>[0]["sendPush"]>) {
+    const fixture = buildDograhFixture("callback", { workflow_run_id: runId });
+    return handleDograhWebhook({
+      body: fixture.payload,
+      headers: new Headers(fixture.headers),
+      fetchTranscript: noFetch,
+      sendPush,
+    });
+  }
+
+  it("keeps the token on transient failures and successful sends", async () => {
+    const { saveSettings, getBusinessFcmToken } = await import("./db");
+    await saveSettings({
+      missedCallReplyTemplate: "tpl",
+      fcmToken: "device-token-1",
+    });
+
+    const flaky = await fireWithPush("push-transient-1", async () => ({
+      sent: false,
+      error: "FCM service unavailable",
+    }));
+    expect(flaky.status).toBe(200);
+    expect(flaky.body).toMatchObject({ pushTokenCleared: false });
+    expect(await getBusinessFcmToken()).toBe("device-token-1");
+
+    const ok = await fireWithPush("push-success-1", async () => ({
+      sent: true,
+      messageId: "projects/callflow/messages/mid-1",
+    }));
+    expect(ok.body).toMatchObject({ pushTokenCleared: false });
+    expect(ok.body.push).toEqual({
+      sent: true,
+      messageId: "projects/callflow/messages/mid-1",
+    });
+    expect(await getBusinessFcmToken()).toBe("device-token-1");
+  });
+
+  it("clears the stored token when FCM reports it unregistered, then skips push", async () => {
+    const { saveSettings, getBusinessFcmToken } = await import("./db");
+    await saveSettings({
+      missedCallReplyTemplate: "tpl",
+      fcmToken: "device-token-dead",
+    });
+
+    let attemptedToken: string | null = null;
+    const dead = await fireWithPush("push-dead-1", async (token) => {
+      attemptedToken = token;
+      // What firebase-admin's FcmError maps to for messaging/unregistered.
+      return {
+        sent: false,
+        error: "Registration token is not registered",
+        invalidToken: true,
+      };
+    });
+    expect(dead.status).toBe(200);
+    expect(attemptedToken).toBe("device-token-dead");
+    expect(dead.body).toMatchObject({ pushTokenCleared: true });
+    expect(await getBusinessFcmToken()).toBe("");
+
+    // Next delivery takes the no-token path — sendPush is never called again.
+    const next = buildDograhFixture("callback", { workflow_run_id: "push-dead-2" });
+    const after = await handleDograhWebhook({
+      body: next.payload,
+      headers: new Headers(next.headers),
+      fetchTranscript: noFetch,
+      sendPush: async () => {
+        throw new Error("sendPush must not be called after the token was cleared");
+      },
+    });
+    expect(after.status).toBe(200);
+    expect(after.body).toMatchObject({
+      pushTokenCleared: false,
+      push: { sent: false, error: "No FCM token configured" },
+    });
+  });
+});
+

@@ -174,6 +174,12 @@ export async function getBusinessFcmToken(): Promise<string> {
   return settings.fcmToken?.trim() || "";
 }
 
+/** Forgets a dead FCM token (device uninstalled / token rotated) so webhooks
+ * stop attempting pushes to it. No-op when the settings row doesn't exist. */
+export async function clearBusinessFcmToken(): Promise<void> {
+  getDb().prepare("UPDATE settings SET fcmToken = '' WHERE id = 1").run();
+}
+
 export async function getClientProfile(): Promise<ClientProfile | null> {
   const row = getDb()
     .prepare("SELECT name, phone, address, email, createdAt FROM client_profile WHERE id = 1")
