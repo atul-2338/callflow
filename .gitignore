@@ -46,6 +46,7 @@ yarn-error.log*
 
 # local dev server capture
 /dev_server.log
+/.smoke-server.log
 
 # local CRM data (contains Twilio credentials)
 /data/*.json

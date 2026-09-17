@@ -13,7 +13,8 @@ import { handleDograhWebhook } from "@/lib/dograh-webhook";
  *
  * Responses: 200 = stored/duplicate (stop retries), 4xx = permanent failure
  * (Dograh dead-letters after its retry budget — check the template/config),
- * 5xx = unexpected, safe to retry.
+ * 503 = DOGRAH_WEBHOOK_SECRET unset on this server in production (all POSTs
+ * rejected until configured), other 5xx = unexpected, safe to retry.
  */
 
 let warnedOnce = false;
@@ -26,8 +27,8 @@ function warnIfSecretUnconfigured() {
     warnedOnce = true;
     console.warn(
       "[dograh-webhook] DOGRAH_WEBHOOK_SECRET is UNSET in production — this " +
-        "endpoint accepts unauthenticated POSTs. Set it in /srv/callflow/.env " +
-        "and restart before pointing real Dograh traffic at it."
+        "endpoint is rejecting every POST with 503 (fail closed). Set it in " +
+        "/srv/callflow/.env and restart to accept Dograh traffic."
     );
   }
 }

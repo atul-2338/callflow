@@ -8,6 +8,7 @@ import {
   normalizePhone,
 } from "./db";
 import {
+  dograhWebhookSecret,
   extractDograhEvent,
   flattenTranscript,
   isDograhRequestAuthorized,
@@ -85,6 +86,19 @@ export async function handleDograhWebhook(opts: {
 }): Promise<DograhWebhookResult> {
   const { body, headers } = opts;
   const searchParams = opts.searchParams ?? new URLSearchParams();
+
+  // Fail closed in production: with no secret configured the auth check below
+  // would treat every request as authorized, letting anyone POST fake call
+  // data. 503 = server misconfiguration, retryable — Dograh keeps retrying so
+  // the outage is loud instead of silently ingesting unauthenticated writes.
+  // Outside production the unset-secret = open endpoint stays available for
+  // local dev and pilot smoke tests.
+  if (!dograhWebhookSecret() && process.env.NODE_ENV === "production") {
+    return {
+      status: 503,
+      body: { error: "webhook secret not configured on this server" },
+    };
+  }
 
   if (!isDograhRequestAuthorized(headers, searchParams)) {
     return { status: 401, body: { error: "unauthorized" } };

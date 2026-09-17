@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   extractDograhEvent,
   flattenTranscript,
@@ -132,7 +132,15 @@ describe("isDograhRequestAuthorized", () => {
   const emptyQuery = new URLSearchParams();
 
   it("is open when DOGRAH_WEBHOOK_SECRET is unset", () => {
-    expect(isDograhRequestAuthorized(headerMap({}), emptyQuery)).toBe(true);
+    // Vitest loads .env.local into process.env, so "unset" must be forced —
+    // a developer machine with DOGRAH_WEBHOOK_SECRET configured locally would
+    // otherwise fail this test for the wrong reason.
+    vi.stubEnv("DOGRAH_WEBHOOK_SECRET", "");
+    try {
+      expect(isDograhRequestAuthorized(headerMap({}), emptyQuery)).toBe(true);
+    } finally {
+      vi.unstubAllEnvs();
+    }
   });
 
   it("accepts the custom header, bearer auth and ?key= fallbacks", () => {

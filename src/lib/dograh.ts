@@ -312,8 +312,11 @@ function secretsMatch(provided: string, expected: string): boolean {
  *    headers verbatim),
  * 2. `Authorization: Bearer <secret>` (Dograh credential binding),
  * 3. `?key=<secret>` query param (works with any configuration).
- * When DOGRAH_WEBHOOK_SECRET is unset the endpoint is open — same convention
- * as APP_AUTH_TOKEN, convenient for the first pilot smoke tests.
+ * When DOGRAH_WEBHOOK_SECRET is unset this check treats the request as
+ * authorized — same open-by-default convention as APP_AUTH_TOKEN, convenient
+ * for local dev and the first pilot smoke tests. Production is NOT affected:
+ * handleDograhWebhook rejects every request with 503 while the secret is
+ * unset, so the open behavior can only apply outside production.
  */
 export function isDograhRequestAuthorized(
   headers: HeaderReader,

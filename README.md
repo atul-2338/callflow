@@ -30,7 +30,7 @@ Copy `.env.example` to `.env.local` and fill in real values:
 | `PLIVO_AUTH_ID` | Plivo auth ID (forwarding test calls — Phase 3) |
 | `PLIVO_AUTH_TOKEN` | Plivo auth token |
 | `PLIVO_NUMBER` | Your Plivo number (E.164) that missed calls forward to |
-| `DOGRAH_WEBHOOK_SECRET` | Shared secret the Dograh webhook node sends to `/api/webhooks/dograh` (header `X-Callflow-Secret`, `Authorization: Bearer`, or `?key=`). Unset = endpoint is open. |
+| `DOGRAH_WEBHOOK_SECRET` | Shared secret the Dograh webhook node sends to `/api/webhooks/dograh` (header `X-Callflow-Secret`, `Authorization: Bearer`, or `?key=` — any one of the three suffices). Unset = endpoint is open **outside production**; in production the endpoint rejects every POST with 503 until it is configured. |
 | `FIREBASE_SERVICE_ACCOUNT` | Firebase service account JSON — single-line or base64-encoded |
 
 | `APP_AUTH_TOKEN` | *Optional.* Shared secret to protect write APIs (leave empty to keep APIs open) |

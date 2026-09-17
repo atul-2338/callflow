@@ -1,7 +1,7 @@
 import fs from "fs";
 import os from "os";
 import path from "path";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { buildDograhFixture, type DograhFixtureName } from "./dograh-fixtures";
 import { handleDograhWebhook } from "./dograh-webhook";
 
@@ -180,6 +180,32 @@ describe("handleDograhWebhook — rejection paths", () => {
       expect(authorized.body.duplicate).toBe(false);
     } finally {
       delete process.env.DOGRAH_WEBHOOK_SECRET;
+    }
+  });
+
+  it("503s every request in production when DOGRAH_WEBHOOK_SECRET is unset", async () => {
+    vi.stubEnv("NODE_ENV", "production");
+    try {
+      const fixture = buildDograhFixture("booked");
+      const closed = await handleDograhWebhook({
+        body: fixture.payload,
+        headers: new Headers({
+          ...fixture.headers,
+          "x-callflow-secret": "anything",
+        }),
+        fetchTranscript: noFetch,
+      });
+      expect(closed.status).toBe(503);
+      expect(closed.body.error).toMatch(/secret not configured/);
+
+      // Nothing was persisted — the fail-closed path runs before any write.
+      const { getCallByDograhRunId } = await import("./db");
+      const row = await getCallByDograhRunId(
+        fixture.payload.workflow_run_id as string
+      );
+      expect(row).toBeNull();
+    } finally {
+      vi.unstubAllEnvs();
     }
   });
 
