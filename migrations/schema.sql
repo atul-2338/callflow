@@ -54,6 +54,7 @@ CREATE TABLE IF NOT EXISTS calls (
   transcript TEXT,
   dograhRunId TEXT,
   dograhDeliveryId TEXT,
+  dograhDisposition TEXT,
   outcome TEXT,
   customerName TEXT,
   calendarEventId TEXT,

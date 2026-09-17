@@ -159,6 +159,7 @@ export function assertPersistentDbPath(dbPath: string): void {
 const CALL_ADDED_COLUMNS: ReadonlyArray<readonly [string, string]> = [
   ["dograhRunId", "TEXT"],
   ["dograhDeliveryId", "TEXT"],
+  ["dograhDisposition", "TEXT"],
   ["outcome", "TEXT"],
   ["customerName", "TEXT"],
   ["calendarEventId", "TEXT"],

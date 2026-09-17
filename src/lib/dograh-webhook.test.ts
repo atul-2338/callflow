@@ -78,6 +78,7 @@ describe("handleDograhWebhook — happy path", () => {
       callerNumber: "+15550000123",
       businessNumber: "+15559998888",
       callStatus: "answered",
+      dograhDisposition: "appointment_booked",
       outcome: "booked",
       durationSeconds: 184,
       customerName: "Priya Raman",
@@ -248,6 +249,10 @@ describe("handleDograhWebhook — rejection paths", () => {
     );
     expect(row!.businessId).toBeNull();
     expect(row!.businessNumber).toBe("+19998887777");
+    // Raw disposition survives even when the mapped outcome is "other" —
+    // this is what makes a real-world mapping miss diagnosable from the DB.
+    expect(row!.dograhDisposition).toBe("unknown");
+    expect(row!.outcome).toBe("other");
   });
 });
 

@@ -267,15 +267,15 @@ export async function addCall(
          id, businessId, callerNumber, businessNumber, callStatus,
          callStartedAt, callEndedAt, durationSeconds, textBackSent,
          textBackSentAt, signalwireCallSid, recordingUrl, transcript,
-         dograhRunId, dograhDeliveryId, outcome, customerName,
-         calendarEventId, transcriptUrl,
+         dograhRunId, dograhDeliveryId, dograhDisposition, outcome,
+         customerName, calendarEventId, transcriptUrl,
          createdAt, updatedAt
        ) VALUES (
          @id, @businessId, @callerNumber, @businessNumber, @callStatus,
          @callStartedAt, @callEndedAt, @durationSeconds, @textBackSent,
          @textBackSentAt, @signalwireCallSid, @recordingUrl, @transcript,
-         @dograhRunId, @dograhDeliveryId, @outcome, @customerName,
-         @calendarEventId, @transcriptUrl,
+         @dograhRunId, @dograhDeliveryId, @dograhDisposition, @outcome,
+         @customerName, @calendarEventId, @transcriptUrl,
          @createdAt, @updatedAt
        )`
     )

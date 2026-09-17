@@ -84,6 +84,9 @@ export interface Call {
   dograhRunId: string | null;
   /** X-Dograh-Delivery-Id of the delivery that created this row. */
   dograhDeliveryId: string | null;
+  /** Raw Dograh call_disposition as delivered, kept beside the mapped
+   * `outcome` so unmapped/renamed dispositions are diagnosable from the DB. */
+  dograhDisposition: string | null;
   outcome: CallOutcome | null;
   customerName: string | null;
   calendarEventId: string | null;

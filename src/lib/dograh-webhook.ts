@@ -158,6 +158,7 @@ export async function handleDograhWebhook(opts: {
       transcript,
       dograhRunId: event.runId,
       dograhDeliveryId: event.deliveryId,
+      dograhDisposition: event.disposition || null,
       outcome: event.outcome,
       customerName: event.customerName,
       calendarEventId: event.calendarEventId,
