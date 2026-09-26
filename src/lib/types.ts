@@ -126,6 +126,16 @@ export interface Business {
   lastVerifiedAt: string | null;
   pendingVerificationFor: string | null;
   pendingVerificationExpiresAt: string | null;
+  billingName: string | null;
+  billingEmail: string | null;
+  billingCountry: string | null;
+  trialStartedAt: string | null;
+  dodoCustomerId: string | null;
+  dodoSubscriptionId: string | null;
+  /** Dodo checkout session behind the last hosted-checkout link we issued. */
+  dodoCheckoutSessionId: string | null;
+  subscriptionStatus: string;
+  subscriptionPaymentId: string | null;
   createdAt: string;
   updatedAt: string;
 }

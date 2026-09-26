@@ -72,8 +72,25 @@ CREATE TABLE IF NOT EXISTS businesses (
   lastVerifiedAt TEXT,
   pendingVerificationFor TEXT,
   pendingVerificationExpiresAt TEXT,
+  billingName TEXT,
+  billingEmail TEXT,
+  billingCountry TEXT,
+  trialStartedAt TEXT,
+  dodoCustomerId TEXT,
+  dodoSubscriptionId TEXT,
+  dodoCheckoutSessionId TEXT,
+  subscriptionStatus TEXT NOT NULL DEFAULT 'not_started',
+  subscriptionPaymentId TEXT,
   createdAt TEXT NOT NULL,
   updatedAt TEXT NOT NULL
+);
+
+-- Dodo's webhook-id header is globally unique for a delivery. This table makes
+-- the signature-verified handler idempotent even if Dodo retries concurrently.
+CREATE TABLE IF NOT EXISTS dodo_webhook_events (
+  webhookId TEXT PRIMARY KEY,
+  eventType TEXT NOT NULL,
+  receivedAt TEXT NOT NULL
 );
 
 CREATE INDEX IF NOT EXISTS idx_contacts_phone ON contacts(phone);
@@ -82,6 +99,10 @@ CREATE INDEX IF NOT EXISTS idx_calls_status ON calls(callStatus);
 CREATE INDEX IF NOT EXISTS idx_calls_started ON calls(callStartedAt);
 CREATE INDEX IF NOT EXISTS idx_businesses_phone ON businesses(phoneNumber);
 CREATE INDEX IF NOT EXISTS idx_businesses_status ON businesses(forwardingStatus);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_businesses_dodo_customer
+  ON businesses(dodoCustomerId) WHERE dodoCustomerId IS NOT NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_businesses_dodo_subscription
+  ON businesses(dodoSubscriptionId) WHERE dodoSubscriptionId IS NOT NULL;
 
 -- Dograh webhook idempotency keys. Partial unique indexes so legacy rows
 -- (NULL keys) never collide, and duplicate webhook deliveries are rejected at

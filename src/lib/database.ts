@@ -166,6 +166,18 @@ const CALL_ADDED_COLUMNS: ReadonlyArray<readonly [string, string]> = [
   ["transcriptUrl", "TEXT"],
 ];
 
+const BUSINESS_ADDED_COLUMNS: ReadonlyArray<readonly [string, string]> = [
+  ["billingName", "TEXT"],
+  ["billingEmail", "TEXT"],
+  ["billingCountry", "TEXT"],
+  ["trialStartedAt", "TEXT"],
+  ["dodoCustomerId", "TEXT"],
+  ["dodoSubscriptionId", "TEXT"],
+  ["dodoCheckoutSessionId", "TEXT"],
+  ["subscriptionStatus", "TEXT NOT NULL DEFAULT 'not_started'"],
+  ["subscriptionPaymentId", "TEXT"],
+];
+
 function migrateCallsTable(db: Database.Database): void {
   const table = db
     .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'calls'")
@@ -177,6 +189,22 @@ function migrateCallsTable(db: Database.Database): void {
   for (const [name, type] of CALL_ADDED_COLUMNS) {
     if (!existing.has(name)) {
       db.exec(`ALTER TABLE calls ADD COLUMN ${name} ${type}`);
+    }
+  }
+}
+
+function migrateBusinessesTable(db: Database.Database): void {
+  const table = db
+    .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'businesses'")
+    .get();
+  if (!table) return;
+
+  const existing = new Set(
+    (db.pragma("table_info(businesses)") as Array<{ name: string }>).map((c) => c.name)
+  );
+  for (const [name, type] of BUSINESS_ADDED_COLUMNS) {
+    if (!existing.has(name)) {
+      db.exec(`ALTER TABLE businesses ADD COLUMN ${name} ${type}`);
     }
   }
 }
@@ -193,6 +221,7 @@ export function getDb(): Database.Database {
   instance.pragma("foreign_keys = ON");
 
   migrateCallsTable(instance);
+  migrateBusinessesTable(instance);
 
   const schema = fs.readFileSync(SCHEMA_PATH, "utf-8");
   instance.exec(schema);

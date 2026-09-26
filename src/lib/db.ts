@@ -409,11 +409,48 @@ export async function getBusinessByPhone(
 }
 
 export async function createBusiness(
-  data: Omit<Business, "id" | "createdAt" | "updatedAt">
+  data: Omit<
+    Business,
+    | "id"
+    | "createdAt"
+    | "updatedAt"
+    | "billingName"
+    | "billingEmail"
+    | "billingCountry"
+    | "trialStartedAt"
+    | "dodoCustomerId"
+    | "dodoSubscriptionId"
+    | "dodoCheckoutSessionId"
+    | "subscriptionStatus"
+    | "subscriptionPaymentId"
+  > &
+    Partial<
+      Pick<
+        Business,
+        | "billingName"
+        | "billingEmail"
+        | "billingCountry"
+        | "trialStartedAt"
+        | "dodoCustomerId"
+        | "dodoSubscriptionId"
+        | "dodoCheckoutSessionId"
+        | "subscriptionStatus"
+        | "subscriptionPaymentId"
+      >
+    >
 ): Promise<Business> {
   const now = new Date().toISOString();
   const business: Business = {
     ...data,
+    billingName: data.billingName ?? null,
+    billingEmail: data.billingEmail ?? null,
+    billingCountry: data.billingCountry ?? null,
+    trialStartedAt: data.trialStartedAt ?? null,
+    dodoCustomerId: data.dodoCustomerId ?? null,
+    dodoSubscriptionId: data.dodoSubscriptionId ?? null,
+    dodoCheckoutSessionId: data.dodoCheckoutSessionId ?? null,
+    subscriptionStatus: data.subscriptionStatus ?? "not_started",
+    subscriptionPaymentId: data.subscriptionPaymentId ?? null,
     id: randomUUID(),
     createdAt: now,
     updatedAt: now,
@@ -422,10 +459,16 @@ export async function createBusiness(
     .prepare(
       `INSERT INTO businesses (
          id, phoneNumber, carrier, forwardingStatus, lastVerifiedAt,
-         pendingVerificationFor, pendingVerificationExpiresAt, createdAt, updatedAt
+         pendingVerificationFor, pendingVerificationExpiresAt, billingName,
+         billingEmail, billingCountry, trialStartedAt, dodoCustomerId,
+         dodoSubscriptionId, dodoCheckoutSessionId, subscriptionStatus,
+         subscriptionPaymentId, createdAt, updatedAt
        ) VALUES (
          @id, @phoneNumber, @carrier, @forwardingStatus, @lastVerifiedAt,
-         @pendingVerificationFor, @pendingVerificationExpiresAt, @createdAt, @updatedAt
+         @pendingVerificationFor, @pendingVerificationExpiresAt, @billingName,
+         @billingEmail, @billingCountry, @trialStartedAt, @dodoCustomerId,
+         @dodoSubscriptionId, @dodoCheckoutSessionId, @subscriptionStatus,
+         @subscriptionPaymentId, @createdAt, @updatedAt
        )`
     )
     .run(business);
@@ -451,8 +494,13 @@ export async function updateBusiness(
          forwardingStatus = @forwardingStatus, lastVerifiedAt = @lastVerifiedAt,
          pendingVerificationFor = @pendingVerificationFor,
          pendingVerificationExpiresAt = @pendingVerificationExpiresAt,
-         updatedAt = @updatedAt
-       WHERE id = @id`
+         billingName = @billingName, billingEmail = @billingEmail,
+         billingCountry = @billingCountry, trialStartedAt = @trialStartedAt,
+         dodoCustomerId = @dodoCustomerId, dodoSubscriptionId = @dodoSubscriptionId,
+         dodoCheckoutSessionId = @dodoCheckoutSessionId,
+         subscriptionStatus = @subscriptionStatus,
+         subscriptionPaymentId = @subscriptionPaymentId, updatedAt = @updatedAt
+        WHERE id = @id`
     )
     .run(updated);
   return updated;
@@ -501,6 +549,123 @@ export async function clearPendingVerification(id: string): Promise<Business | n
     pendingVerificationFor: null,
     pendingVerificationExpiresAt: null,
   });
+}
+
+export async function getBusinessByDodoSubscriptionId(
+  subscriptionId: string
+): Promise<Business | undefined> {
+  const row = getDb()
+    .prepare("SELECT * FROM businesses WHERE dodoSubscriptionId = ?")
+    .get(subscriptionId) as BusinessRow | undefined;
+  return row ? mapBusiness(row) : undefined;
+}
+
+export interface DodoWebhookUpdate {
+  webhookId: string;
+  eventType: string;
+  /** Our business id, echoed back from the checkout session metadata. A hint. */
+  businessHint?: string | null;
+  customerId?: string | null;
+  subscriptionId?: string | null;
+  subscriptionStatus?: string | null;
+  paymentId?: string | null;
+  /** Stamp `trialStartedAt` (set for the `subscription.active` event). */
+  startTrialAt?: string | null;
+}
+
+/**
+ * Record a signature-verified Dodo webhook and apply its billing effect.
+ *
+ * Idempotency: Dodo's `webhook-id` header is globally unique per delivery, so
+ * the insert into `dodo_webhook_events` claims the event. Claim and fulfillment
+ * share one transaction — if the update throws, both roll back, so Dodo's retry
+ * can process the event again instead of being told "already seen".
+ *
+ * Matching never uses Dodo's `business_id` (that identifies the Dodo *merchant*
+ * account, not a Callflow business). Resolution order: checkout metadata hint →
+ * the customer id we created → the subscription id.
+ */
+export async function applyDodoWebhookEvent(
+  input: DodoWebhookUpdate
+): Promise<{ accepted: boolean; businessId: string | null }> {
+  const db = getDb();
+  const receivedAt = new Date().toISOString();
+  const apply = db.transaction(() => {
+    try {
+      db.prepare(
+        "INSERT INTO dodo_webhook_events (webhookId, eventType, receivedAt) VALUES (?, ?, ?)"
+      ).run(input.webhookId, input.eventType, receivedAt);
+    } catch (error) {
+      if (
+        typeof error === "object" &&
+        error !== null &&
+        typeof (error as { code?: unknown }).code === "string" &&
+        (error as { code: string }).code.startsWith("SQLITE_CONSTRAINT")
+      ) {
+        return { accepted: false, businessId: null };
+      }
+      throw error;
+    }
+
+    let business: { id: string } | undefined;
+    if (input.businessHint) {
+      business = db
+        .prepare("SELECT id FROM businesses WHERE id = ?")
+        .get(input.businessHint) as { id: string } | undefined;
+    }
+    if (!business && input.customerId) {
+      business = db
+        .prepare("SELECT id FROM businesses WHERE dodoCustomerId = ?")
+        .get(input.customerId) as { id: string } | undefined;
+    }
+    if (!business && input.subscriptionId) {
+      business = db
+        .prepare("SELECT id FROM businesses WHERE dodoSubscriptionId = ?")
+        .get(input.subscriptionId) as { id: string } | undefined;
+    }
+
+    if (!business) return { accepted: true, businessId: null };
+
+    const sets: string[] = [];
+    const values: unknown[] = [];
+
+    if (input.subscriptionStatus) {
+      sets.push("subscriptionStatus = ?");
+      values.push(input.subscriptionStatus);
+    }
+    if (input.paymentId) {
+      sets.push("subscriptionPaymentId = ?");
+      values.push(input.paymentId);
+    }
+    // A checkout session has no subscription id until the customer pays, so the
+    // webhook is what links the two. Claim it only when this row has none and no
+    // other row already owns it (the column has a partial unique index).
+    if (input.subscriptionId) {
+      sets.push(
+        `dodoSubscriptionId = COALESCE(
+           dodoSubscriptionId,
+           (SELECT ? WHERE NOT EXISTS (
+             SELECT 1 FROM businesses WHERE dodoSubscriptionId = ?
+           ))
+         )`
+      );
+      values.push(input.subscriptionId, input.subscriptionId);
+    }
+    if (input.startTrialAt) {
+      sets.push("trialStartedAt = COALESCE(trialStartedAt, ?)");
+      values.push(input.startTrialAt);
+    }
+
+    if (sets.length) {
+      db.prepare(
+        `UPDATE businesses SET ${sets.join(", ")}, updatedAt = ? WHERE id = ?`
+      ).run(...values, receivedAt, business.id);
+    }
+
+    return { accepted: true, businessId: business.id };
+  });
+
+  return apply();
 }
 
 export async function getBusinessesByCarrier(

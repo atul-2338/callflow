@@ -47,6 +47,14 @@ yarn-error.log*
 # local dev server capture
 /dev_server.log
 /.smoke-server.log
+/.next-dev*.log
+/data/*.log
+
+# third-party agent plugin (not part of the app)
+/dodo-agent-plugin/
+
+# editor
+/.vscode/
 
 # local CRM data (contains Twilio credentials)
 /data/*.json
@@ -64,6 +72,8 @@ yarn-error.log*
 
 # local Kilo/agent config (contains API keys — never commit)
 /.kilo/
+
+/.claude/settings.json
 
 # vercel
 .vercel

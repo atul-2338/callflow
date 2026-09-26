@@ -9,6 +9,7 @@ import {
   Lock,
   Phone,
 } from "lucide-react";
+import { toE164InternationalPhone } from "@/lib/util";
 
 const INDUSTRIES = [
   "Plumbing",
@@ -31,12 +32,15 @@ const CARRIERS = [
   "Other / MVNO",
 ];
 
+const COUNTRIES = ["US", "CA", "GB", "AU", "IN", "DE", "FR"];
+
 interface FormState {
   name: string;
   industry: string;
   carrier: string;
   phone: string;
   email: string;
+  country: string;
 }
 
 type Errors = Partial<Record<keyof FormState, string>>;
@@ -46,19 +50,22 @@ function validate(f: FormState): Errors {
   if (f.name.trim().length < 2) e.name = "Enter your business name.";
   if (!f.industry) e.industry = "Select your industry.";
   if (!f.carrier) e.carrier = "Select your carrier.";
-  const digits = f.phone.replace(/\D/g, "");
-  if (digits.length < 10 || digits.length > 15)
-    e.phone = "Enter a valid business number (10+ digits).";
+  try {
+    toE164InternationalPhone(f.phone, f.country);
+  } catch {
+    e.phone = "Enter a valid business number with country code (e.g. +1 555 123 4567).";
+  }
   if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(f.email.trim()))
     e.email = "Enter a valid email address.";
   return e;
 }
 
 /*
- * Phase 1B — onboarding wizard, steps 1–2, UI ONLY.
- * No data is submitted anywhere: Phase 2 wires step 2 to a Dodo Payments
- * hosted checkout (3-day trial, $49/mo) and writes trial_started_at
- * server-side on webhook completion.
+ * Phase 2 — onboarding wizard. Step 1 collects the business profile; step 2
+ * POSTs /api/billing/signup, which creates the Dodo customer and a hosted
+ * Checkout Session for the Solo plan (3-day trial, $49/mo) and returns its URL.
+ * trial_started_at is stamped by the /api/webhooks/dodo handler when Dodo
+ * reports `subscription.active`, so our trial window matches Dodo's billing.
  */
 export default function OnboardingWizard() {
   const [step, setStep] = useState<1 | 2>(1);
@@ -68,6 +75,7 @@ export default function OnboardingWizard() {
     carrier: "",
     phone: "",
     email: "",
+    country: "US",
   });
   const [errors, setErrors] = useState<Errors>({});
 
@@ -121,7 +129,7 @@ export default function OnboardingWizard() {
             onSubmit={handleContinue}
           />
         ) : (
-          <StepTwo name={form.name.trim()} />
+          <StepTwo form={form} />
         )}
       </div>
     </div>
@@ -256,7 +264,49 @@ const PLAN_FEATURES = [
   "Cancel anytime",
 ];
 
-function StepTwo({ name }: { name: string }) {
+function StepTwo({ form }: { form: FormState }) {
+  const [country, setCountry] = useState("US");
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState("");
+
+  async function startCheckout() {
+    setError("");
+    setSubmitting(true);
+    try {
+      const response = await fetch("/api/billing/signup", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          phoneNumber: form.phone.replace(/[^\d+]/g, ""),
+          name: form.name.trim(),
+          email: form.email.trim(),
+          country,
+        }),
+      });
+      const data = (await response.json()) as {
+        checkoutUrl?: string | null;
+        alreadySubscribed?: boolean;
+        error?: string;
+      };
+      if (!response.ok) throw new Error(data.error || "Unable to start your trial.");
+
+      if (data.checkoutUrl) {
+        window.location.assign(data.checkoutUrl);
+        return;
+      }
+      // No URL means a verified Dodo webhook already linked a subscription to
+      // this business: go to the page that reports the server-side state.
+      if (data.alreadySubscribed) {
+        window.location.assign("/checkout/return");
+        return;
+      }
+      throw new Error("Dodo did not return a checkout URL. Your trial has not started yet.");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Unable to start your trial.");
+      setSubmitting(false);
+    }
+  }
+
   return (
     <div className="ios-card mt-6 p-6 sm:p-8">
       <div className="flex flex-wrap items-center justify-between gap-2">
@@ -267,15 +317,15 @@ function StepTwo({ name }: { name: string }) {
           3-day free trial
         </span>
       </div>
-      {name && (
+      {form.name && (
         <p className="mt-1.5 text-sm text-ink-2">
-          Setting things up for <b className="text-ink">{name}</b>.
+          Setting things up for <b className="text-ink">{form.name.trim()}</b>.
         </p>
       )}
 
       <div className="mt-6 rounded-2xl border border-separator p-5">
         <div className="flex items-baseline justify-between">
-          <p className="text-base font-semibold text-ink">CallFlow Pro</p>
+          <p className="text-base font-semibold text-ink">CallFlow Solo</p>
           <p className="text-sm text-ink-3">$49 / month</p>
         </div>
         <div className="mt-2 flex items-baseline gap-2">
@@ -292,19 +342,31 @@ function StepTwo({ name }: { name: string }) {
         </ul>
       </div>
 
-      {/* Phase 2 replaces this with a Dodo Payments hosted-checkout launch. */}
+      <Field label="Billing country" error={error || undefined}>
+        <select
+          value={country}
+          onChange={(e) => setCountry(e.target.value)}
+          className="ios-field mt-5 appearance-none"
+        >
+          {COUNTRIES.map((c) => (
+            <option key={c} value={c}>
+              {c}
+            </option>
+          ))}
+        </select>
+      </Field>
       <button
         type="button"
-        disabled
-        className="ios-pill-primary mt-6 w-full px-4 py-3.5 text-[15px]"
+        onClick={startCheckout}
+        disabled={submitting}
+        className="ios-pill-primary mt-6 w-full px-4 py-3.5 text-[15px] disabled:opacity-60"
       >
         <Lock className="h-4 w-4" />
-        Secure checkout — coming soon
+        {submitting ? "Opening secure checkout…" : "Start free trial — secure checkout"}
       </button>
       <p className="mt-3 text-center text-xs leading-relaxed text-ink-3">
-        Checkout will be powered by Dodo Payments: $0 today, then $49/month
-        after your 3-day trial. This preview doesn&apos;t take any payment
-        details.
+        Checkout is powered by Dodo Payments: $0 today, then $49/month after
+        your 3-day trial. Cancel anytime.
       </p>
 
       <div className="mt-5 text-center text-sm">

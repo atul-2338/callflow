@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import Link from "next/link";
 import {
   ArrowLeft,
@@ -13,6 +13,7 @@ import {
   PhoneForwarded,
   Settings2,
 } from "lucide-react";
+import { toE164InternationalPhone } from "@/lib/util";
 
 const CALLFLOW_NUMBER = "+1 (888) 545-9969";
 
@@ -24,13 +25,42 @@ export default function OnboardingFlow() {
   const [step, setStep] = useState(1);
   const [phone, setPhone] = useState("");
   const [phoneError, setPhoneError] = useState("");
+  const [billingName, setBillingName] = useState("");
+  const [billingEmail, setBillingEmail] = useState("");
+  const [billingCountry, setBillingCountry] = useState("");
+  const [billingError, setBillingError] = useState("");
   const [confirming, setConfirming] = useState(false);
+  const [trial, setTrial] = useState<{ start: string; end: string } | null>(null);
+
+  useEffect(() => {
+    async function loadBillingConfirmation() {
+      const response = await fetch("/api/me", { cache: "no-store" });
+      if (!response.ok) return;
+      const data = (await response.json()) as {
+        trialStartedAt: string | null;
+        trialEndsAt: string | null;
+        hasSubscription: boolean;
+      };
+      // Only a verified Dodo webhook can put a subscription id on this business,
+      // so that — not the checkout redirect — is what completes the flow.
+      if (data.hasSubscription) {
+        if (data.trialStartedAt && data.trialEndsAt) {
+          setTrial({ start: data.trialStartedAt, end: data.trialEndsAt });
+        }
+        setStep(3);
+      }
+    }
+    void loadBillingConfirmation();
+  }, []);
 
   function continueToInstructions(e: React.FormEvent) {
     e.preventDefault();
-    const digits = normalizePhone(phone).replace(/\D/g, "");
-    if (digits.length < 10) {
-      setPhoneError("Please enter a valid phone number (at least 10 digits).");
+    try {
+      toE164InternationalPhone(phone, billingCountry || "US");
+    } catch {
+      setPhoneError(
+        "Please enter a valid phone number with country code (e.g. +1 555 123 4567)."
+      );
       return;
     }
     setPhoneError("");
@@ -38,26 +68,38 @@ export default function OnboardingFlow() {
   }
 
   async function confirmSetup() {
+    setBillingError("");
     setConfirming(true);
     try {
-      await fetch("/api/onboarding/complete", {
+      const response = await fetch("/api/billing/signup", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ phone: normalizePhone(phone) }),
+        body: JSON.stringify({
+          phoneNumber: normalizePhone(phone),
+          name: billingName,
+          email: billingEmail,
+          country: billingCountry,
+        }),
       });
-    } catch {
-      // Local-only demo: failure is non-fatal.
-    }
-    try {
-      localStorage.setItem("callflow_business_phone", normalizePhone(phone));
-      localStorage.setItem("callflow_onboarded", "true");
-    } catch {
-      // ignore storage errors
-    }
-    setTimeout(() => {
+      const data = (await response.json()) as {
+        checkoutUrl?: string | null;
+        alreadySubscribed?: boolean;
+        error?: string;
+      };
+      if (!response.ok) throw new Error(data.error || "Unable to start your subscription.");
+
+      if (!data.checkoutUrl) {
+        if (data.alreadySubscribed) {
+          window.location.assign("/checkout/return");
+          return;
+        }
+        throw new Error("Dodo did not return a checkout URL. Your subscription has not been confirmed.");
+      }
+      window.location.assign(data.checkoutUrl);
+    } catch (error) {
+      setBillingError(error instanceof Error ? error.message : "Unable to start your subscription.");
       setConfirming(false);
-      setStep(3);
-    }, 800);
+    }
   }
 
   const inputClass =
@@ -163,6 +205,37 @@ export default function OnboardingFlow() {
           </div>
         </div>
 
+        <div className="mt-6 space-y-3 rounded-2xl border border-white/10 bg-[#161a24] p-5">
+          <p className="text-sm font-semibold text-white">Start your 3-day free trial</p>
+          <p className="text-xs text-slate-400">
+            A payment method is collected securely by Dodo Payments. You will not be charged today.
+          </p>
+          <input
+            value={billingName}
+            onChange={(e) => setBillingName(e.target.value)}
+            placeholder="Your name"
+            autoComplete="name"
+            className={inputClass}
+          />
+          <input
+            type="email"
+            value={billingEmail}
+            onChange={(e) => setBillingEmail(e.target.value)}
+            placeholder="Email address"
+            autoComplete="email"
+            className={inputClass}
+          />
+          <input
+            value={billingCountry}
+            onChange={(e) => setBillingCountry(e.target.value.toUpperCase())}
+            placeholder="Billing country (2-letter code, e.g. US)"
+            autoComplete="country"
+            maxLength={2}
+            className={inputClass}
+          />
+          {billingError && <p className="text-sm text-red-400">{billingError}</p>}
+        </div>
+
         <div className="mt-6 flex gap-3">
           <button
             type="button"
@@ -181,11 +254,11 @@ export default function OnboardingFlow() {
             {confirming ? (
               <>
                 <Loader2 className="h-4 w-4 animate-spin" />
-                Checking…
+                Opening secure checkout…
               </>
             ) : (
               <>
-                I&apos;ve set it up
+                Continue to secure checkout
                 <ArrowRight className="h-4 w-4" />
               </>
             )}
@@ -204,8 +277,15 @@ export default function OnboardingFlow() {
         You&apos;re all set!
       </h1>
       <p className="mt-3 text-sm leading-relaxed text-slate-400">
-        CallFlow is now watching <b className="text-slate-200">{CALLFLOW_NUMBER}</b>. Every
-        missed call will be recorded, transcribed, and waiting for you in your dashboard.
+        Your free trial began on{" "}
+        <b className="text-slate-200">
+          {trial ? new Date(trial.start).toLocaleDateString() : "the server-confirmed date"}
+        </b>{" "}
+        and ends on{" "}
+        <b className="text-slate-200">
+          {trial ? new Date(trial.end).toLocaleDateString() : "the server-confirmed date"}
+        </b>
+        . CallFlow is now watching <b className="text-slate-200">{CALLFLOW_NUMBER}</b>.
       </p>
       <div className="mt-8 flex w-full flex-col gap-3 sm:flex-row sm:justify-center">
         <Link

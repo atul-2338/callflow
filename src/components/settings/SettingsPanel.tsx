@@ -1,15 +1,39 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import Link from "next/link";
 import {
   Bell,
   Building2,
+  CreditCard,
+  ExternalLink,
+  KeyRound,
+  Loader2,
   Mail,
   MessageSquare,
   Phone,
   PhoneForwarded,
   Save,
+  Smartphone,
 } from "lucide-react";
+import { getAuthToken, getFcmToken, saveClientSettings, setAuthToken, setFcmToken } from "@/lib/api";
+import type { BillingAccessState } from "@/lib/billing";
+
+interface BillingState {
+  subscriptionStatus: string;
+  trialEndsAt: string | null;
+  access: { state: BillingAccessState; entitled: boolean };
+  hasSubscription: boolean;
+}
+
+const BILLING_COPY: Record<BillingAccessState, string> = {
+  trialing: "Free trial running",
+  active: "Subscribed",
+  past_due: "Payment overdue — update your card to keep service on",
+  on_hold: "On hold — update your card to resume",
+  awaiting_checkout: "Awaiting checkout",
+  lapsed: "Cancelled or expired",
+};
 
 interface BusinessInfo {
   name: string;
@@ -46,7 +70,12 @@ function load<T>(key: string, fallback: T): T {
 export default function SettingsPanel() {
   const [info, setInfo] = useState<BusinessInfo>(DEFAULT_INFO);
   const [prefs, setPrefs] = useState<Prefs>({ notifyEmail: true, notifySms: false });
+  const [authToken, setAuthTokenInput] = useState("");
+  const [fcmToken, setFcmTokenInput] = useState("");
   const [saved, setSaved] = useState(false);
+  const [billing, setBilling] = useState<BillingState | null>(null);
+  const [billingError, setBillingError] = useState("");
+  const [openingPortal, setOpeningPortal] = useState(false);
 
   useEffect(() => {
     // TODO(Phase 5): replace localStorage-backed panel with DB-backed settings;
@@ -54,12 +83,45 @@ export default function SettingsPanel() {
     // eslint-disable-next-line react-hooks/set-state-in-effect
     setInfo(load(STORAGE_INFO, DEFAULT_INFO));
     setPrefs(load(STORAGE_PREFS, { notifyEmail: true, notifySms: false }));
+    setAuthTokenInput(getAuthToken());
+    setFcmTokenInput(getFcmToken());
+
+    // Billing state comes from the server (it reflects Dodo's webhooks), not
+    // from localStorage. 401/404 simply means this browser has no trial session.
+    void (async () => {
+      try {
+        const response = await fetch("/api/me", { cache: "no-store" });
+        if (!response.ok) return;
+        setBilling((await response.json()) as BillingState);
+      } catch {
+        // leave the billing card hidden
+      }
+    })();
   }, []);
 
-  function save() {
+  async function openBillingPortal() {
+    setBillingError("");
+    setOpeningPortal(true);
+    try {
+      const response = await fetch("/api/billing/portal", { method: "POST" });
+      const data = (await response.json()) as { link?: string; error?: string };
+      if (!response.ok || !data.link) {
+        throw new Error(data.error || "Unable to open Dodo billing.");
+      }
+      window.location.assign(data.link);
+    } catch (error) {
+      setBillingError(error instanceof Error ? error.message : "Unable to open Dodo billing.");
+      setOpeningPortal(false);
+    }
+  }
+
+  async function save() {
     try {
       window.localStorage.setItem(STORAGE_INFO, JSON.stringify(info));
       window.localStorage.setItem(STORAGE_PREFS, JSON.stringify(prefs));
+      setAuthToken(authToken);
+      setFcmToken(fcmToken);
+      await saveClientSettings({ authToken, fcmToken });
       setSaved(true);
       setTimeout(() => setSaved(false), 2500);
     } catch {
@@ -193,6 +255,90 @@ export default function SettingsPanel() {
                 className="h-5 w-5 accent-brand-500"
               />
             </label>
+          </div>
+        </section>
+
+        {billing && (
+          <section className="rounded-2xl border border-white/10 bg-[#161a24] p-6 shadow-lg shadow-black/20">
+            <div className="mb-4 flex items-center gap-2.5">
+              <CreditCard className="h-5 w-5 text-brand-400" />
+              <h2 className="text-base font-semibold text-white">Plan &amp; billing</h2>
+            </div>
+            <div className="flex flex-wrap items-baseline justify-between gap-2">
+              <p className="text-sm font-medium text-slate-200">CallFlow Solo</p>
+              <p className="text-xs text-slate-500">$49 / month after the trial</p>
+            </div>
+            <p className="mt-2 text-sm text-slate-400">
+              {BILLING_COPY[billing.access.state]}
+              {billing.trialEndsAt
+                ? ` · through ${new Date(billing.trialEndsAt).toLocaleDateString()}`
+                : ""}
+            </p>
+            {billing.hasSubscription ? (
+              <button
+                type="button"
+                onClick={openBillingPortal}
+                disabled={openingPortal}
+                className="mt-4 inline-flex items-center gap-2 rounded-lg bg-brand-500 px-4 py-2.5 text-sm font-semibold text-white shadow-lg shadow-brand-500/20 transition-colors hover:bg-brand-400 disabled:opacity-50"
+              >
+                {openingPortal ? (
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                ) : (
+                  <ExternalLink className="h-4 w-4" />
+                )}
+                Manage payment method or cancel
+              </button>
+            ) : (
+              <Link
+                href="/onboarding"
+                className="mt-4 inline-flex items-center gap-2 rounded-lg bg-brand-500 px-4 py-2.5 text-sm font-semibold text-white shadow-lg shadow-brand-500/20 transition-colors hover:bg-brand-400"
+              >
+                Continue checkout
+              </Link>
+            )}
+            {billingError && <p className="mt-3 text-sm text-red-400">{billingError}</p>}
+            <p className="mt-3 text-xs leading-relaxed text-slate-500">
+              Billing runs through Dodo Payments. Cancelling stops future charges
+              and keeps access until the end of any period already paid for.
+            </p>
+          </section>
+        )}
+
+        <section className="rounded-2xl border border-white/10 bg-[#161a24] p-6 shadow-lg shadow-black/20">
+          <div className="mb-4 flex items-center gap-2.5">
+            <Smartphone className="h-5 w-5 text-brand-400" />
+            <h2 className="text-base font-semibold text-white">Device credentials</h2>
+          </div>
+          <div className="space-y-4">
+            <div>
+              <label className="mb-1 block text-sm font-medium text-slate-300">
+                App auth token
+              </label>
+              <div className="flex items-center gap-2 rounded-lg border border-white/10 bg-white/5 px-3 py-2.5">
+                <KeyRound className="h-4 w-4 text-slate-500" />
+                <input
+                  className="w-full bg-transparent text-sm text-white placeholder-slate-500 focus:outline-none"
+                  type="password"
+                  value={authToken}
+                  onChange={(e) => setAuthTokenInput(e.target.value)}
+                  placeholder="Bearer token for protected writes"
+                />
+              </div>
+            </div>
+            <div>
+              <label className="mb-1 block text-sm font-medium text-slate-300">
+                FCM device token
+              </label>
+              <div className="flex items-center gap-2 rounded-lg border border-white/10 bg-white/5 px-3 py-2.5">
+                <Smartphone className="h-4 w-4 text-slate-500" />
+                <input
+                  className="w-full bg-transparent text-sm text-white placeholder-slate-500 focus:outline-none"
+                  value={fcmToken}
+                  onChange={(e) => setFcmTokenInput(e.target.value)}
+                  placeholder="Firebase push token"
+                />
+              </div>
+            </div>
           </div>
         </section>
 
