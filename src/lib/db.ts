@@ -425,7 +425,6 @@ export async function createBusiness(
     | "subscriptionPaymentId"
     | "smsVerificationCode"
     | "smsVerificationExpiresAt"
-    | "whatsappNumber"
   > &
     Partial<
       Pick<
@@ -441,7 +440,6 @@ export async function createBusiness(
         | "subscriptionPaymentId"
         | "smsVerificationCode"
         | "smsVerificationExpiresAt"
-        | "whatsappNumber"
       >
     >
 ): Promise<Business> {
@@ -459,7 +457,6 @@ export async function createBusiness(
     subscriptionPaymentId: data.subscriptionPaymentId ?? null,
     smsVerificationCode: data.smsVerificationCode ?? null,
     smsVerificationExpiresAt: data.smsVerificationExpiresAt ?? null,
-    whatsappNumber: data.whatsappNumber ?? null,
     id: randomUUID(),
     createdAt: now,
     updatedAt: now,
@@ -472,14 +469,14 @@ export async function createBusiness(
          billingEmail, billingCountry, trialStartedAt, dodoCustomerId,
          dodoSubscriptionId, dodoCheckoutSessionId, subscriptionStatus,
          subscriptionPaymentId, smsVerificationCode, smsVerificationExpiresAt,
-         whatsappNumber, createdAt, updatedAt
+         createdAt, updatedAt
        ) VALUES (
          @id, @phoneNumber, @carrier, @forwardingStatus, @lastVerifiedAt,
          @pendingVerificationFor, @pendingVerificationExpiresAt, @billingName,
          @billingEmail, @billingCountry, @trialStartedAt, @dodoCustomerId,
          @dodoSubscriptionId, @dodoCheckoutSessionId, @subscriptionStatus,
          @subscriptionPaymentId, @smsVerificationCode, @smsVerificationExpiresAt,
-         @whatsappNumber, @createdAt, @updatedAt
+         @createdAt, @updatedAt
        )`
     )
     .run(business);
@@ -513,7 +510,7 @@ export async function updateBusiness(
          subscriptionPaymentId = @subscriptionPaymentId,
          smsVerificationCode = @smsVerificationCode,
          smsVerificationExpiresAt = @smsVerificationExpiresAt,
-         whatsappNumber = @whatsappNumber, updatedAt = @updatedAt
+         updatedAt = @updatedAt
         WHERE id = @id`
     )
     .run(updated);

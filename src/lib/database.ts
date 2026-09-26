@@ -178,7 +178,6 @@ const BUSINESS_ADDED_COLUMNS: ReadonlyArray<readonly [string, string]> = [
   ["subscriptionPaymentId", "TEXT"],
   ["smsVerificationCode", "TEXT"],
   ["smsVerificationExpiresAt", "TEXT"],
-  ["whatsappNumber", "TEXT"],
 ];
 
 function migrateCallsTable(db: Database.Database): void {

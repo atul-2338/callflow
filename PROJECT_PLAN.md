@@ -55,10 +55,6 @@ Work through phases in order. Do not skip ahead to a later phase until every ite
     `/api/onboarding/confirm-sms` consumes it and marks the number verified
     (`src/lib/sms.ts`, `src/lib/db.ts`). Carrier-side toll-free verification /
     10DLC registration is an external step with the carriers.
-- [~] Add WhatsApp via a BSP
-  - Data model + config scaffolded (`businesses.whatsappNumber`, `.env.example`
-    placeholders). Live channel needs a BSP account (Twilio WhatsApp, MessageBird,
-    360dialog, …).
 - [x] Decide whether a native mobile push app is still needed alongside the web wizard
   - Decision: **no native app for the pilot.** The web wizard + FCM push (token
     stored in Settings, delivered by `src/lib/firebase.ts`) covers the pilot;

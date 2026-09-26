@@ -83,7 +83,6 @@ CREATE TABLE IF NOT EXISTS businesses (
   subscriptionPaymentId TEXT,
   smsVerificationCode TEXT,
   smsVerificationExpiresAt TEXT,
-  whatsappNumber TEXT,
   createdAt TEXT NOT NULL,
   updatedAt TEXT NOT NULL
 );
