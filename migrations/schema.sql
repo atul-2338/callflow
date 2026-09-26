@@ -81,8 +81,19 @@ CREATE TABLE IF NOT EXISTS businesses (
   dodoCheckoutSessionId TEXT,
   subscriptionStatus TEXT NOT NULL DEFAULT 'not_started',
   subscriptionPaymentId TEXT,
+  smsVerificationCode TEXT,
+  smsVerificationExpiresAt TEXT,
+  whatsappNumber TEXT,
   createdAt TEXT NOT NULL,
   updatedAt TEXT NOT NULL
+);
+
+-- Landing-page waitlist signups (Phase 6 tester acquisition).
+CREATE TABLE IF NOT EXISTS waitlist (
+  id TEXT PRIMARY KEY,
+  email TEXT NOT NULL UNIQUE,
+  source TEXT NOT NULL DEFAULT 'landing',
+  createdAt TEXT NOT NULL
 );
 
 -- Dodo's webhook-id header is globally unique for a delivery. This table makes

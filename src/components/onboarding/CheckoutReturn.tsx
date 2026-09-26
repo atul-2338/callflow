@@ -88,6 +88,9 @@ export default function CheckoutReturn() {
     if (phase !== "verifying") return;
     let cancelled = false;
 
+    // The first poll runs immediately; `check` is async (its setState calls
+    // happen after an await), so this is not a synchronous setState-in-effect.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     void check();
     const timer = setInterval(() => {
       if (cancelled) return;

@@ -136,6 +136,11 @@ export interface Business {
   dodoCheckoutSessionId: string | null;
   subscriptionStatus: string;
   subscriptionPaymentId: string | null;
+  /** 6-digit code for SMS-based forwarding verification (Phase 5). */
+  smsVerificationCode: string | null;
+  smsVerificationExpiresAt: string | null;
+  /** WhatsApp Business number once a BSP channel is provisioned (Phase 5). */
+  whatsappNumber: string | null;
   createdAt: string;
   updatedAt: string;
 }

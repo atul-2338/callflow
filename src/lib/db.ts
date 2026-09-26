@@ -423,6 +423,9 @@ export async function createBusiness(
     | "dodoCheckoutSessionId"
     | "subscriptionStatus"
     | "subscriptionPaymentId"
+    | "smsVerificationCode"
+    | "smsVerificationExpiresAt"
+    | "whatsappNumber"
   > &
     Partial<
       Pick<
@@ -436,6 +439,9 @@ export async function createBusiness(
         | "dodoCheckoutSessionId"
         | "subscriptionStatus"
         | "subscriptionPaymentId"
+        | "smsVerificationCode"
+        | "smsVerificationExpiresAt"
+        | "whatsappNumber"
       >
     >
 ): Promise<Business> {
@@ -451,6 +457,9 @@ export async function createBusiness(
     dodoCheckoutSessionId: data.dodoCheckoutSessionId ?? null,
     subscriptionStatus: data.subscriptionStatus ?? "not_started",
     subscriptionPaymentId: data.subscriptionPaymentId ?? null,
+    smsVerificationCode: data.smsVerificationCode ?? null,
+    smsVerificationExpiresAt: data.smsVerificationExpiresAt ?? null,
+    whatsappNumber: data.whatsappNumber ?? null,
     id: randomUUID(),
     createdAt: now,
     updatedAt: now,
@@ -462,13 +471,15 @@ export async function createBusiness(
          pendingVerificationFor, pendingVerificationExpiresAt, billingName,
          billingEmail, billingCountry, trialStartedAt, dodoCustomerId,
          dodoSubscriptionId, dodoCheckoutSessionId, subscriptionStatus,
-         subscriptionPaymentId, createdAt, updatedAt
+         subscriptionPaymentId, smsVerificationCode, smsVerificationExpiresAt,
+         whatsappNumber, createdAt, updatedAt
        ) VALUES (
          @id, @phoneNumber, @carrier, @forwardingStatus, @lastVerifiedAt,
          @pendingVerificationFor, @pendingVerificationExpiresAt, @billingName,
          @billingEmail, @billingCountry, @trialStartedAt, @dodoCustomerId,
          @dodoSubscriptionId, @dodoCheckoutSessionId, @subscriptionStatus,
-         @subscriptionPaymentId, @createdAt, @updatedAt
+         @subscriptionPaymentId, @smsVerificationCode, @smsVerificationExpiresAt,
+         @whatsappNumber, @createdAt, @updatedAt
        )`
     )
     .run(business);
@@ -499,7 +510,10 @@ export async function updateBusiness(
          dodoCustomerId = @dodoCustomerId, dodoSubscriptionId = @dodoSubscriptionId,
          dodoCheckoutSessionId = @dodoCheckoutSessionId,
          subscriptionStatus = @subscriptionStatus,
-         subscriptionPaymentId = @subscriptionPaymentId, updatedAt = @updatedAt
+         subscriptionPaymentId = @subscriptionPaymentId,
+         smsVerificationCode = @smsVerificationCode,
+         smsVerificationExpiresAt = @smsVerificationExpiresAt,
+         whatsappNumber = @whatsappNumber, updatedAt = @updatedAt
         WHERE id = @id`
     )
     .run(updated);
@@ -675,4 +689,85 @@ export async function getBusinessesByCarrier(
     .prepare("SELECT * FROM businesses WHERE carrier = ?")
     .all(carrier) as unknown as BusinessRow[];
   return rows.map(mapBusiness);
+}
+
+// ---- Waitlist (Phase 6 tester acquisition) ----
+
+export interface WaitlistSignup {
+  id: string;
+  email: string;
+  source: string;
+  createdAt: string;
+}
+
+/**
+ * Record a landing-page waitlist signup. Idempotent per email: a repeat signup
+ * returns the existing row instead of inserting a duplicate (email is UNIQUE).
+ */
+export async function addWaitlistSignup(
+  email: string,
+  source = "landing"
+): Promise<{ signup: WaitlistSignup; created: boolean }> {
+  const normalized = email.trim().toLowerCase();
+  const existing = getDb()
+    .prepare("SELECT * FROM waitlist WHERE email = ?")
+    .get(normalized) as WaitlistSignup | undefined;
+  if (existing) return { signup: existing, created: false };
+
+  const signup: WaitlistSignup = {
+    id: randomUUID(),
+    email: normalized,
+    source,
+    createdAt: new Date().toISOString(),
+  };
+  getDb()
+    .prepare("INSERT INTO waitlist (id, email, source, createdAt) VALUES (?, ?, ?, ?)")
+    .run(signup.id, signup.email, signup.source, signup.createdAt);
+  return { signup, created: true };
+}
+
+export async function getWaitlistSignups(): Promise<WaitlistSignup[]> {
+  return getDb()
+    .prepare("SELECT * FROM waitlist ORDER BY createdAt DESC")
+    .all() as unknown as WaitlistSignup[];
+}
+
+// ---- SMS forwarding verification (Phase 5) ----
+
+export const SMS_CODE_TTL_MS = 10 * 60 * 1000; // 10 minutes
+
+/** Store a fresh 6-digit verification code for a business. */
+export async function setSmsVerificationCode(
+  businessId: string,
+  code: string
+): Promise<Business | null> {
+  return updateBusiness(businessId, {
+    smsVerificationCode: code,
+    smsVerificationExpiresAt: new Date(Date.now() + SMS_CODE_TTL_MS).toISOString(),
+  });
+}
+
+/**
+ * Check a submitted code against the stored one. Returns true only when the
+ * code matches and has not expired; on success the code is consumed (cleared)
+ * so it cannot be replayed. The caller then marks forwarding active.
+ */
+export async function checkSmsVerificationCode(
+  businessId: string,
+  code: string
+): Promise<boolean> {
+  const business = await getBusinessById(businessId);
+  if (!business?.smsVerificationCode || !business.smsVerificationExpiresAt) {
+    return false;
+  }
+  const valid =
+    business.smsVerificationCode === code.trim() &&
+    new Date() <= new Date(business.smsVerificationExpiresAt);
+  if (valid) {
+    await updateBusiness(businessId, {
+      smsVerificationCode: null,
+      smsVerificationExpiresAt: null,
+    });
+  }
+  return valid;
 }

@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { SiteFooter } from "@/components/marketing/SiteChrome";
+import WaitlistForm from "@/components/marketing/WaitlistForm";
 import {
   ArrowRight,
   Bell,
@@ -102,6 +103,8 @@ export default function Landing() {
       <Pricing />
       <Reviews />
       <TrustStrip />
+      <Waitlist />
+
       <FinalCta />
       <SiteFooter />
     </main>
@@ -392,6 +395,23 @@ function TrustStrip() {
             {b}
           </span>
         ))}
+      </div>
+    </section>
+  );
+}
+
+function Waitlist() {
+  return (
+    <section className="mx-auto w-full max-w-6xl px-4 py-16 sm:px-6">
+      <div className="rounded-3xl border border-white/10 bg-white/[0.04] p-8 text-center sm:p-12">
+        <h2 className="text-2xl font-bold tracking-tight text-foreground sm:text-3xl">
+          Tester slots open soon
+        </h2>
+        <p className="mx-auto mt-3 max-w-xl text-sm leading-relaxed text-white/70">
+          We&apos;re onboarding a small group of local businesses first. Join the
+          waitlist and we&apos;ll email you the moment your slot opens.
+        </p>
+        <WaitlistForm />
       </div>
     </section>
   );

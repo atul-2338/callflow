@@ -1,4 +1,8 @@
-import { isValidPhoneNumber, parsePhoneNumber } from "libphonenumber-js";
+import {
+  isValidPhoneNumber,
+  parsePhoneNumber,
+  type CountryCode,
+} from "libphonenumber-js";
 
 export function normalizeEnvValue(value: string | undefined): string {
   if (!value) return "";
@@ -64,7 +68,7 @@ export function toE164InternationalPhone(
   const cleaned = value.replace(/[^\d+]/g, "");
   if (isValidPhoneNumber(cleaned)) return cleaned;
   try {
-    const parsed = parsePhoneNumber(cleaned, defaultCountry);
+    const parsed = parsePhoneNumber(cleaned, defaultCountry as CountryCode);
     if (parsed?.isValid()) return parsed.number;
   } catch {
     // fall through to the friendly error below

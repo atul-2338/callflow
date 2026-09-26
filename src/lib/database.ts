@@ -176,6 +176,9 @@ const BUSINESS_ADDED_COLUMNS: ReadonlyArray<readonly [string, string]> = [
   ["dodoCheckoutSessionId", "TEXT"],
   ["subscriptionStatus", "TEXT NOT NULL DEFAULT 'not_started'"],
   ["subscriptionPaymentId", "TEXT"],
+  ["smsVerificationCode", "TEXT"],
+  ["smsVerificationExpiresAt", "TEXT"],
+  ["whatsappNumber", "TEXT"],
 ];
 
 function migrateCallsTable(db: Database.Database): void {

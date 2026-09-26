@@ -4,17 +4,19 @@ import {
   getBusinessByPhone,
   updateBusiness,
 } from "@/lib/db";
-import { getPlivoConfig, isPlivoConfigured } from "@/lib/plivo";
+import { getPlivoConfig } from "@/lib/plivo";
 import { isValidPhone } from "@/lib/util";
+import { CARRIERS, type Carrier } from "@/lib/types";
 import { applyCors, corsPreflightResponse, handlePreflight } from "@/lib/cors";
 
 export async function OPTIONS(request: Request) {
   return corsPreflightResponse(request);
 }
 
-// Simplified onboarding: the owner enables call forwarding through their
-// phone's own settings menu. No MMI codes, no automatic verification call.
-// They confirm manually via /api/onboarding/complete.
+// Self-serve onboarding: the owner enables call forwarding through their
+// phone's own settings menu. No MMI codes. Verification is explicit and
+// separate: a silent test call (/api/onboarding/verify) or an SMS code
+// (/api/onboarding/verify-sms + /api/onboarding/confirm-sms).
 export async function POST(request: Request) {
   const preflight = handlePreflight(request);
   if (preflight) return preflight;
@@ -23,6 +25,7 @@ export async function POST(request: Request) {
     const body = await request.json();
     const phoneNumber = (body.phone_number || "").trim();
     const phoneType = body.phone_type === "android" ? "android" : "iphone";
+    const carrier = (body.carrier || "other").trim() as Carrier;
 
     if (!isValidPhone(phoneNumber)) {
       return applyCors(
@@ -34,27 +37,27 @@ export async function POST(request: Request) {
       );
     }
 
-    if (!isPlivoConfigured()) {
+    if (!(CARRIERS as readonly string[]).includes(carrier)) {
       return applyCors(
         NextResponse.json(
-          { error: "Plivo is not configured. Set PLIVO_AUTH_ID, PLIVO_AUTH_TOKEN, and PLIVO_NUMBER in .env.local." },
+          { error: `Unknown carrier: ${carrier}` },
           { status: 400 }
         ),
         request
       );
     }
 
-    const { number: plivoNumber } = getPlivoConfig();
-
     let business = await getBusinessByPhone(phoneNumber);
     if (business) {
       business =
-        (await updateBusiness(business.id, { forwardingStatus: "pending" })) ??
-        business;
+        (await updateBusiness(business.id, {
+          carrier,
+          forwardingStatus: "pending",
+        })) ?? business;
     } else {
       business = await createBusiness({
         phoneNumber,
-        carrier: "other",
+        carrier,
         forwardingStatus: "pending",
         lastVerifiedAt: null,
         pendingVerificationFor: null,
@@ -68,8 +71,8 @@ export async function POST(request: Request) {
         businessId: business.id,
         phone_number: phoneNumber,
         phone_type: phoneType,
-        carrier: "other",
-        plivo_number: plivoNumber,
+        carrier,
+        plivo_number: getPlivoConfig().number,
         forwarding_status: "pending",
       }),
       request

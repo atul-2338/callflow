@@ -8,29 +8,52 @@ import {
   CheckCircle2,
   Copy,
   Loader2,
+  MessageSquareText,
   PartyPopper,
   Phone,
+  PhoneCall,
   PhoneForwarded,
   Settings2,
 } from "lucide-react";
 import { toE164InternationalPhone } from "@/lib/util";
 
 const CALLFLOW_NUMBER = "+1 (888) 545-9969";
+const CALLFLOW_TEL = "+18885459969";
+
+const CARRIERS = [
+  { value: "verizon", label: "Verizon" },
+  { value: "att", label: "AT&T" },
+  { value: "tmobile", label: "T-Mobile" },
+  { value: "other", label: "Other / MVNO" },
+];
 
 function normalizePhone(v: string) {
   return v.replace(/[^\d+]/g, "");
 }
 
+type VerifyState = {
+  method: "call" | "sms" | null;
+  status: "idle" | "sending" | "sent" | "verified" | "error";
+  message: string;
+};
+
+const IDLE_VERIFY: VerifyState = { method: null, status: "idle", message: "" };
+
 export default function OnboardingFlow() {
   const [step, setStep] = useState(1);
   const [phone, setPhone] = useState("");
+  const [carrier, setCarrier] = useState("other");
   const [phoneError, setPhoneError] = useState("");
+  const [businessId, setBusinessId] = useState<string | null>(null);
+  const [starting, setStarting] = useState(false);
   const [billingName, setBillingName] = useState("");
   const [billingEmail, setBillingEmail] = useState("");
   const [billingCountry, setBillingCountry] = useState("");
   const [billingError, setBillingError] = useState("");
   const [confirming, setConfirming] = useState(false);
   const [trial, setTrial] = useState<{ start: string; end: string } | null>(null);
+  const [verify, setVerify] = useState<VerifyState>(IDLE_VERIFY);
+  const [smsCode, setSmsCode] = useState("");
 
   useEffect(() => {
     async function loadBillingConfirmation() {
@@ -53,7 +76,7 @@ export default function OnboardingFlow() {
     void loadBillingConfirmation();
   }, []);
 
-  function continueToInstructions(e: React.FormEvent) {
+  async function continueToInstructions(e: React.FormEvent) {
     e.preventDefault();
     try {
       toE164InternationalPhone(phone, billingCountry || "US");
@@ -64,7 +87,121 @@ export default function OnboardingFlow() {
       return;
     }
     setPhoneError("");
-    setStep(2);
+    setStarting(true);
+    try {
+      const response = await fetch("/api/onboarding/start", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          phone_number: normalizePhone(phone),
+          carrier,
+        }),
+      });
+      const data = (await response.json()) as {
+        businessId?: string;
+        error?: string;
+      };
+      if (!response.ok || !data.businessId) {
+        throw new Error(data.error || "Unable to start setup.");
+      }
+      setBusinessId(data.businessId);
+      setStep(2);
+    } catch (error) {
+      setPhoneError(error instanceof Error ? error.message : "Unable to start setup.");
+    } finally {
+      setStarting(false);
+    }
+  }
+
+  async function startCallVerification() {
+    if (!businessId) return;
+    setVerify({ method: "call", status: "sending", message: "" });
+    try {
+      const response = await fetch("/api/onboarding/verify", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ businessId }),
+      });
+      const data = (await response.json()) as { error?: string; message?: string };
+      if (!response.ok) throw new Error(data.error || "Unable to place the test call.");
+      setVerify({
+        method: "call",
+        status: "sent",
+        message: data.message || "Answer the call and hang up — that's the whole test.",
+      });
+      pollVerification();
+    } catch (error) {
+      setVerify({
+        method: "call",
+        status: "error",
+        message: error instanceof Error ? error.message : "Unable to place the test call.",
+      });
+    }
+  }
+
+  async function startSmsVerification() {
+    if (!businessId) return;
+    setVerify({ method: "sms", status: "sending", message: "" });
+    try {
+      const response = await fetch("/api/onboarding/verify-sms", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ businessId }),
+      });
+      const data = (await response.json()) as { error?: string };
+      if (!response.ok) throw new Error(data.error || "Unable to send the code.");
+      setVerify({
+        method: "sms",
+        status: "sent",
+        message: "We texted a 6-digit code to your business number.",
+      });
+    } catch (error) {
+      setVerify({
+        method: "sms",
+        status: "error",
+        message: error instanceof Error ? error.message : "Unable to send the code.",
+      });
+    }
+  }
+
+  async function confirmSmsCode() {
+    if (!businessId) return;
+    setVerify({ method: "sms", status: "sending", message: "" });
+    try {
+      const response = await fetch("/api/onboarding/confirm-sms", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ businessId, code: smsCode }),
+      });
+      const data = (await response.json()) as { error?: string };
+      if (!response.ok) throw new Error(data.error || "That code didn't work.");
+      setVerify({ method: "sms", status: "verified", message: "Number verified!" });
+    } catch (error) {
+      setVerify({
+        method: "sms",
+        status: "error",
+        message: error instanceof Error ? error.message : "That code didn't work.",
+      });
+    }
+  }
+
+  function pollVerification() {
+    if (!businessId) return;
+    const timer = setInterval(async () => {
+      try {
+        const response = await fetch(`/api/onboarding/status/${businessId}`, {
+          cache: "no-store",
+        });
+        if (!response.ok) return;
+        const data = (await response.json()) as { forwarding_status?: string };
+        if (data.forwarding_status === "active") {
+          clearInterval(timer);
+          setVerify({ method: "call", status: "verified", message: "Number verified!" });
+        }
+      } catch {
+        // keep polling; the answer URL flips the status server-side
+      }
+    }, 3000);
   }
 
   async function confirmSetup() {
@@ -130,12 +267,33 @@ export default function OnboardingFlow() {
             />
             {phoneError && <p className="mt-1.5 text-sm text-red-400">{phoneError}</p>}
           </div>
+          <div>
+            <label className="mb-1 block text-sm font-medium text-slate-300">
+              Your carrier
+            </label>
+            <select
+              value={carrier}
+              onChange={(e) => setCarrier(e.target.value)}
+              className={`${inputClass} appearance-none`}
+            >
+              {CARRIERS.map((c) => (
+                <option key={c.value} value={c.value} className="bg-[#0f1117]">
+                  {c.label}
+                </option>
+              ))}
+            </select>
+          </div>
           <button
             type="submit"
-            className="flex w-full items-center justify-center gap-2 rounded-lg bg-brand-500 px-4 py-3 text-sm font-semibold text-white shadow-lg shadow-brand-500/20 transition-colors hover:bg-brand-400"
+            disabled={starting}
+            className="flex w-full items-center justify-center gap-2 rounded-lg bg-brand-500 px-4 py-3 text-sm font-semibold text-white shadow-lg shadow-brand-500/20 transition-colors hover:bg-brand-400 disabled:opacity-50"
           >
+            {starting ? (
+              <Loader2 className="h-4 w-4 animate-spin" />
+            ) : (
+              <ArrowRight className="h-4 w-4" />
+            )}
             Continue
-            <ArrowRight className="h-4 w-4" />
           </button>
         </form>
       </div>
@@ -196,6 +354,14 @@ export default function OnboardingFlow() {
             </li>
           </ol>
 
+          <a
+            href={`tel:${CALLFLOW_TEL}`}
+            className="mt-4 flex items-center justify-center gap-2 rounded-lg border border-white/10 bg-white/5 px-4 py-2.5 text-sm font-medium text-slate-200 transition-colors hover:bg-white/10"
+          >
+            <Phone className="h-4 w-4" />
+            Test call — dial {CALLFLOW_NUMBER}
+          </a>
+
           <div className="mt-4 flex items-start gap-2 rounded-lg bg-brand-500/10 p-3 text-xs text-brand-300">
             <Settings2 className="mt-0.5 h-4 w-4 shrink-0" />
             <p>
@@ -203,6 +369,83 @@ export default function OnboardingFlow() {
               calls made to its own number too.
             </p>
           </div>
+        </div>
+
+        {/* Verification */}
+        <div className="mt-6 rounded-2xl border border-white/10 bg-[#161a24] p-5">
+          <p className="text-sm font-semibold text-white">Verify your number</p>
+          <p className="mt-1 text-xs text-slate-400">
+            Prove you own this number so we can switch forwarding on. Either way
+            works.
+          </p>
+
+          {verify.status === "verified" ? (
+            <div className="mt-4 flex items-center gap-2 rounded-lg bg-booked/10 p-3 text-sm font-medium text-booked">
+              <CheckCircle2 className="h-4 w-4" />
+              Number verified — forwarding is live.
+            </div>
+          ) : (
+            <div className="mt-4 space-y-3">
+              <div className="flex flex-col gap-2 sm:flex-row">
+                <button
+                  type="button"
+                  onClick={startCallVerification}
+                  disabled={verify.status === "sending"}
+                  className="flex flex-1 items-center justify-center gap-2 rounded-lg bg-brand-500/10 px-4 py-2.5 text-sm font-medium text-brand-300 transition-colors hover:bg-brand-500/20 disabled:opacity-50"
+                >
+                  {verify.method === "call" && verify.status === "sending" ? (
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                  ) : (
+                    <PhoneCall className="h-4 w-4" />
+                  )}
+                  Call me now
+                </button>
+                <button
+                  type="button"
+                  onClick={startSmsVerification}
+                  disabled={verify.status === "sending"}
+                  className="flex flex-1 items-center justify-center gap-2 rounded-lg bg-brand-500/10 px-4 py-2.5 text-sm font-medium text-brand-300 transition-colors hover:bg-brand-500/20 disabled:opacity-50"
+                >
+                  {verify.method === "sms" && verify.status === "sending" ? (
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                  ) : (
+                    <MessageSquareText className="h-4 w-4" />
+                  )}
+                  Text me a code
+                </button>
+              </div>
+
+              {verify.method === "sms" && verify.status === "sent" && (
+                <div className="flex gap-2">
+                  <input
+                    value={smsCode}
+                    onChange={(e) => setSmsCode(e.target.value.replace(/\D/g, "").slice(0, 6))}
+                    placeholder="6-digit code"
+                    inputMode="numeric"
+                    className={`${inputClass} flex-1`}
+                  />
+                  <button
+                    type="button"
+                    onClick={confirmSmsCode}
+                    disabled={smsCode.length !== 6}
+                    className="rounded-lg bg-brand-500 px-4 py-2.5 text-sm font-semibold text-white disabled:opacity-50"
+                  >
+                    Verify
+                  </button>
+                </div>
+              )}
+
+              {verify.message && (
+                <p
+                  className={`text-xs ${
+                    verify.status === "error" ? "text-red-400" : "text-slate-400"
+                  }`}
+                >
+                  {verify.message}
+                </p>
+              )}
+            </div>
+          )}
         </div>
 
         <div className="mt-6 space-y-3 rounded-2xl border border-white/10 bg-[#161a24] p-5">
