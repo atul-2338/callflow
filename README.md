@@ -13,6 +13,7 @@ CallFlow forwards a business's missed calls to a Plivo number answered by a Dogr
 
 - **Next.js 16** (App Router, typed routes) + **React 19** + **TypeScript** (strict) + **Tailwind CSS 4**
 - **Plivo** — forwarding number + test calls (REST API via `src/lib/plivo.ts`)
+- **Telnyx** — inbound call forwarding to the Dograh agent (Call Control API via `src/lib/telnyx.ts`)
 - **Dograh AI** — voice agent (webhook integration in Phase 4)
 - **Firebase Admin** (`firebase-admin`) — push notifications via FCM
 - **SQLite** (`better-sqlite3`) — persistent database (file location configurable via `DATABASE_PATH`)
@@ -35,6 +36,10 @@ Copy `.env.example` to `.env.local` and fill in real values:
 | `PLIVO_AUTH_ID` | Plivo auth ID (forwarding test calls — Phase 3) |
 | `PLIVO_AUTH_TOKEN` | Plivo auth token |
 | `PLIVO_NUMBER` | Your Plivo number (E.164) that missed calls forward to |
+| `TELNYX_API_KEY` | Telnyx API key (Call Control transfer commands) |
+| `TELNYX_PUBLIC_KEY` | Telnyx webhook public key (Ed25519 signature verification) — Mission Control → API Keys → Public Key |
+| `TELNYX_NUMBER` | Your Telnyx number (E.164) that missed calls forward to |
+| `TELNYX_FORWARD_TO` | The Dograh agent number (E.164) that forwarded calls are transferred to |
 | `DOGRAH_WEBHOOK_SECRET` | Shared secret the Dograh webhook node sends to `/api/webhooks/dograh` (header `X-Callflow-Secret`, `Authorization: Bearer`, or `?key=` — any one of the three suffices). Unset = endpoint is open **outside production**; in production the endpoint rejects every POST with 503 until it is configured. |
 | `FIREBASE_SERVICE_ACCOUNT` | Firebase service account JSON — single-line or base64-encoded |
 
@@ -70,12 +75,42 @@ The schema is created automatically on first run — there is no manual migratio
 
 > The live `.db` file is gitignored — only `migrations/schema.sql` is committed. Never commit a database file.
 
-## Call flow (Plivo + Dograh)
+## Call flow (Plivo + Telnyx + Dograh)
 
-A business's carrier forwards missed calls to the Plivo number; Dograh's AI
-agent answers and books appointments. At end of call the workflow's **send
-webhook** node POSTs the result to Callflow, which writes the `calls` row and
-pushes an FCM notification to the business owner.
+A business's carrier forwards missed calls to the CallFlow forwarding number
+(Plivo or Telnyx); Dograh's AI agent answers and books appointments. At end of
+call the workflow's **send webhook** node POSTs the result to Callflow, which
+writes the `calls` row and pushes an FCM notification to the business owner.
+
+### Telnyx call forwarding
+
+The Telnyx number receives the business's forwarded missed calls. Telnyx
+POSTs a `call.initiated` webhook to `/api/v1/telephony/telnyx/answer`; after
+the Ed25519 signature is verified, the call is transferred to the Dograh agent
+number (`TELNYX_FORWARD_TO`) via the Call Control API, with the original
+caller's number as the caller ID.
+
+Configure in Mission Control → Connections (the Call Control App behind the
+forwarding number):
+
+- **Webhook URL**: `https://<your-host>/api/v1/telephony/telnyx/answer`
+- **Webhook API version**: `2`
+- Do **not** auto-answer: the transfer is issued while the call is still
+  ringing.
+
+Signature verification follows the official SDK's standardwebhooks pattern:
+the signed message is `timestamp|body` (headers `Telnyx-Signature-Ed25519` +
+`Telnyx-Timestamp`), with a 5-minute replay window. `TELNYX_PUBLIC_KEY` is the
+account public key from Mission Control → API Keys → Public Key. When it is
+unset the endpoint is open (local dev only); in production it rejects every
+webhook with 503 until the key is set.
+
+Local smoke test (works only with `TELNYX_PUBLIC_KEY` unset — a real delivery
+carries a signature only Telnyx's private key can produce):
+
+```bash
+node scripts/simulate-telnyx-call.mjs
+```
 
 ### Webhook contract (verified against Dograh source)
 
@@ -138,12 +173,14 @@ In the workflow's end-of-call **send webhook** node set:
 
 ### Business matching (pilot)
 
-Forwarded calls arrive with `called_number` = the **Plivo number**, not the
-business's own line, so matching is deliberately conservative:
+Forwarded calls arrive with `called_number` = the **forwarding number** (Plivo
+or Telnyx), not the business's own line, so matching is deliberately
+conservative:
 
 1. exact hit on `businesses.phoneNumber` (normalized) → that business;
-2. exactly **one** business exists and either `PLIVO_NUMBER` is unset or equals
-   `called_number` → that business;
+2. exactly **one** business exists and `called_number` equals the configured
+   `PLIVO_NUMBER` or `TELNYX_NUMBER` (or neither is configured) → that
+   business;
 3. otherwise the call is stored with `businessId = NULL` — nothing is silently
    dropped, and responses show `matchedBusiness: false`.
 

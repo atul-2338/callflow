@@ -17,6 +17,7 @@ import {
 } from "./dograh";
 import { sendPushNotification, type NotifyMissedCallResult } from "./firebase";
 import { getPlivoConfig } from "./plivo";
+import { getTelnyxConfig } from "./telnyx";
 import type { CallOutcome } from "./types";
 
 /**
@@ -55,9 +56,9 @@ async function fetchTranscriptFromUrl(url: string): Promise<string | null> {
 
 /**
  * Pilot-safe business matching. Real forwarding means `called_number` is the
- * Plivo number, not the business's own line — so:
+ * forwarding number (Plivo or Telnyx), not the business's own line — so:
  * 1. exact match on businesses.phone_number (normalized),
- * 2. call reached our Plivo number and exactly one business exists → it,
+ * 2. call reached our forwarding number and exactly one business exists → it,
  * 3. no routing info at all and exactly one business exists → it,
  * 4. otherwise null (row is still recorded; nothing is silently dropped).
  */
@@ -70,11 +71,14 @@ export async function matchDograhBusiness(calledNumber: string) {
   const sole = all.length === 1 ? all[0] : null;
   if (!sole) return null;
   if (!calledNumber) return sole;
-  const plivo = normalizePhone(getPlivoConfig().number || "");
-  // Plivo number not configured (early pilot): one business, no way to
+  const forwardingNumbers = [
+    normalizePhone(getPlivoConfig().number || ""),
+    normalizePhone(getTelnyxConfig().number || ""),
+  ].filter(Boolean);
+  // No forwarding number configured (early pilot): one business, no way to
   // misroute — match it.
-  if (!plivo) return sole;
-  if (normalizePhone(calledNumber) === plivo) return sole;
+  if (forwardingNumbers.length === 0) return sole;
+  if (forwardingNumbers.includes(normalizePhone(calledNumber))) return sole;
   return null;
 }
 

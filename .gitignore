@@ -46,6 +46,8 @@ yarn-error.log*
 
 # local dev server capture
 /dev_server.log
+/dev-server.log
+/dev.log
 /.smoke-server.log
 /.next-dev*.log
 /data/*.log
