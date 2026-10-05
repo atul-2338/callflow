@@ -6,6 +6,7 @@ import {
   ArrowLeft,
   ArrowRight,
   CheckCircle2,
+  ChevronDown,
   Copy,
   Loader2,
   MessageSquareText,
@@ -26,6 +27,52 @@ const CARRIERS = [
   { value: "tmobile", label: "T-Mobile" },
   { value: "other", label: "Other / MVNO" },
 ];
+
+const COUNTRIES = [
+  { value: "US", label: "United States (+1)" },
+  { value: "CA", label: "Canada (+1)" },
+  { value: "GB", label: "United Kingdom (+44)" },
+  { value: "AU", label: "Australia (+61)" },
+  { value: "NZ", label: "New Zealand (+64)" },
+  { value: "IE", label: "Ireland (+353)" },
+  { value: "DE", label: "Germany (+49)" },
+  { value: "FR", label: "France (+33)" },
+  { value: "ES", label: "Spain (+34)" },
+  { value: "IT", label: "Italy (+39)" },
+  { value: "NL", label: "Netherlands (+31)" },
+  { value: "SE", label: "Sweden (+46)" },
+  { value: "IN", label: "India (+91)" },
+  { value: "SG", label: "Singapore (+65)" },
+  { value: "MX", label: "Mexico (+52)" },
+  { value: "BR", label: "Brazil (+55)" },
+];
+
+function formatPhoneInput(v: string) {
+  const digits = v.replace(/\D/g, "").replace(/^1/, "");
+  if (!digits) return "";
+  if (digits.length <= 3) return `+1 (${digits}`;
+  if (digits.length <= 6) return `+1 (${digits.slice(0, 3)}) ${digits.slice(3)}`;
+  return `+1 (${digits.slice(0, 3)}) ${digits.slice(3, 6)}-${digits.slice(6, 10)}`;
+}
+
+function isPhoneValid(v: string) {
+  return v.replace(/\D/g, "").length >= 11;
+}
+
+function StepProgress({ step }: { step: number }) {
+  return (
+    <div className="mb-6 flex gap-1.5">
+      {[1, 2, 3].map((s) => (
+        <div
+          key={s}
+          className={`h-1 flex-1 rounded-full transition-colors ${
+            s <= step ? "bg-gold" : "bg-black/[0.08]"
+          }`}
+        />
+      ))}
+    </div>
+  );
+}
 
 function normalizePhone(v: string) {
   return v.replace(/[^\d+]/g, "");
@@ -54,6 +101,7 @@ export default function OnboardingFlow() {
   const [trial, setTrial] = useState<{ start: string; end: string } | null>(null);
   const [verify, setVerify] = useState<VerifyState>(IDLE_VERIFY);
   const [smsCode, setSmsCode] = useState("");
+  const [shakeKey, setShakeKey] = useState(0);
 
   useEffect(() => {
     async function loadBillingConfirmation() {
@@ -239,22 +287,21 @@ export default function OnboardingFlow() {
     }
   }
 
-  const inputClass =
-    "w-full rounded-lg border border-white/10 bg-white/5 px-3.5 py-3 text-base text-white placeholder-slate-500 shadow-sm focus:border-brand-500 focus:outline-none focus:ring-2 focus:ring-brand-500/30";
+  const inputClass = "ios-field";
 
   if (step === 1) {
     return (
       <div className="mx-auto flex min-h-[70vh] max-w-md flex-col justify-center px-4">
-        <span className="mb-3 text-sm font-semibold text-brand-400">Step 1 of 3</span>
-        <h1 className="text-2xl font-bold tracking-tight text-white">
+        <span className="mb-3 text-sm font-semibold text-wire">Step 1 of 3</span>
+        <h1 className="text-2xl font-bold tracking-tight text-ink">
           What&apos;s your business phone number?
         </h1>
-        <p className="mt-2 text-sm text-slate-400">
+        <p className="mt-2 text-sm text-ink-2">
           This is the number that will forward missed calls to CallFlow.
         </p>
         <form onSubmit={continueToInstructions} className="mt-6 space-y-4">
           <div>
-            <label className="mb-1 block text-sm font-medium text-slate-300">
+            <label className="mb-1 block text-sm font-medium text-ink-2">
               Business phone number
             </label>
             <input
@@ -265,10 +312,10 @@ export default function OnboardingFlow() {
               placeholder="+1 555 123 4567"
               className={inputClass}
             />
-            {phoneError && <p className="mt-1.5 text-sm text-red-400">{phoneError}</p>}
+            {phoneError && <p className="mt-1.5 text-sm text-danger">{phoneError}</p>}
           </div>
           <div>
-            <label className="mb-1 block text-sm font-medium text-slate-300">
+            <label className="mb-1 block text-sm font-medium text-ink-2">
               Your carrier
             </label>
             <select
@@ -277,7 +324,7 @@ export default function OnboardingFlow() {
               className={`${inputClass} appearance-none`}
             >
               {CARRIERS.map((c) => (
-                <option key={c.value} value={c.value} className="bg-[#0f1117]">
+                <option key={c.value} value={c.value} className="bg-white">
                   {c.label}
                 </option>
               ))}
@@ -286,7 +333,7 @@ export default function OnboardingFlow() {
           <button
             type="submit"
             disabled={starting}
-            className="flex w-full items-center justify-center gap-2 rounded-lg bg-brand-500 px-4 py-3 text-sm font-semibold text-white shadow-lg shadow-brand-500/20 transition-colors hover:bg-brand-400 disabled:opacity-50"
+            className="ios-pill-primary w-full px-4 py-3 text-sm disabled:opacity-50"
           >
             {starting ? (
               <Loader2 className="h-4 w-4 animate-spin" />
@@ -303,38 +350,38 @@ export default function OnboardingFlow() {
   if (step === 2) {
     return (
       <div className="mx-auto flex min-h-[70vh] max-w-xl flex-col justify-center px-4 py-10">
-        <span className="mb-3 text-sm font-semibold text-brand-400">Step 2 of 3</span>
-        <h1 className="text-2xl font-bold tracking-tight text-white">
+        <span className="mb-3 text-sm font-semibold text-wire">Step 2 of 3</span>
+        <h1 className="text-2xl font-bold tracking-tight text-ink">
           Enable call forwarding on your phone
         </h1>
-        <p className="mt-2 text-sm text-slate-400">
+        <p className="mt-2 text-sm text-ink-2">
           Route calls that reach your number to CallFlow so we can catch the ones
           you miss.
         </p>
 
-        <div className="mt-6 rounded-2xl border border-white/10 bg-[#161a24] p-5">
+        <div className="mt-6 rounded-2xl border border-separator bg-white p-5 shadow-sm">
           <div className="flex items-center gap-3">
-            <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-brand-500/10 text-brand-400">
+            <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-wire/10 text-wire">
               <PhoneForwarded className="h-5 w-5" />
             </div>
             <div>
-              <p className="text-sm font-semibold text-white">Forward to CallFlow</p>
-              <p className="text-xs text-slate-500">When unanswered or busy</p>
+              <p className="text-sm font-semibold text-ink">Forward to CallFlow</p>
+              <p className="text-xs text-ink-3">When unanswered or busy</p>
             </div>
           </div>
 
-          <div className="mt-4 rounded-lg bg-white/5 p-4">
-            <p className="text-xs font-medium uppercase tracking-wide text-slate-500">
+          <div className="mt-4 rounded-lg bg-black/[0.03] p-4">
+            <p className="text-xs font-medium uppercase tracking-wide text-ink-3">
               Forwarding number
             </p>
             <div className="mt-1 flex items-center justify-between gap-3">
-              <span className="text-lg font-bold tracking-tight text-white">
+              <span className="text-lg font-bold tracking-tight text-ink">
                 {CALLFLOW_NUMBER}
               </span>
               <button
                 type="button"
                 onClick={() => navigator.clipboard?.writeText("+18885459969")}
-                className="flex items-center gap-1.5 rounded-md border border-white/10 bg-white/5 px-2.5 py-1.5 text-xs font-medium text-slate-300 transition-colors hover:bg-white/10"
+                className="flex items-center gap-1.5 rounded-md border border-separator bg-white px-2.5 py-1.5 text-xs font-medium text-ink-2 transition-colors hover:bg-black/[0.03]"
               >
                 <Copy className="h-3.5 w-3.5" />
                 Copy
@@ -342,27 +389,27 @@ export default function OnboardingFlow() {
             </div>
           </div>
 
-          <ol className="mt-4 list-inside list-decimal space-y-1.5 text-sm text-slate-400">
+          <ol className="mt-4 list-inside list-decimal space-y-1.5 text-sm text-ink-2">
             <li>Open your phone&apos;s Settings</li>
             <li>
-              Find <b className="text-slate-200">Call Forwarding</b> (often under “Phone” or
+              Find <b className="text-ink">Call Forwarding</b> (often under “Phone” or
               “Call”)
             </li>
             <li>
-              Forward <b className="text-slate-200">unanswered</b> and{" "}
-              <b className="text-slate-200">busy</b> calls to {CALLFLOW_NUMBER}
+              Forward <b className="text-ink">unanswered</b> and{" "}
+              <b className="text-ink">busy</b> calls to {CALLFLOW_NUMBER}
             </li>
           </ol>
 
           <a
             href={`tel:${CALLFLOW_TEL}`}
-            className="mt-4 flex items-center justify-center gap-2 rounded-lg border border-white/10 bg-white/5 px-4 py-2.5 text-sm font-medium text-slate-200 transition-colors hover:bg-white/10"
+            className="mt-4 flex items-center justify-center gap-2 rounded-lg border border-separator bg-white px-4 py-2.5 text-sm font-medium text-ink transition-colors hover:bg-black/[0.03]"
           >
             <Phone className="h-4 w-4" />
             Test call — dial {CALLFLOW_NUMBER}
           </a>
 
-          <div className="mt-4 flex items-start gap-2 rounded-lg bg-brand-500/10 p-3 text-xs text-brand-300">
+          <div className="mt-4 flex items-start gap-2 rounded-lg bg-wire/10 p-3 text-xs text-wire">
             <Settings2 className="mt-0.5 h-4 w-4 shrink-0" />
             <p>
               If you&apos;re just testing, you can skip forwarding — CallFlow catches
@@ -372,9 +419,9 @@ export default function OnboardingFlow() {
         </div>
 
         {/* Verification */}
-        <div className="mt-6 rounded-2xl border border-white/10 bg-[#161a24] p-5">
-          <p className="text-sm font-semibold text-white">Verify your number</p>
-          <p className="mt-1 text-xs text-slate-400">
+        <div className="mt-6 rounded-2xl border border-separator bg-white p-5 shadow-sm">
+          <p className="text-sm font-semibold text-ink">Verify your number</p>
+          <p className="mt-1 text-xs text-ink-2">
             Prove you own this number so we can switch forwarding on. Either way
             works.
           </p>
@@ -391,7 +438,7 @@ export default function OnboardingFlow() {
                   type="button"
                   onClick={startCallVerification}
                   disabled={verify.status === "sending"}
-                  className="flex flex-1 items-center justify-center gap-2 rounded-lg bg-brand-500/10 px-4 py-2.5 text-sm font-medium text-brand-300 transition-colors hover:bg-brand-500/20 disabled:opacity-50"
+                  className="flex flex-1 items-center justify-center gap-2 rounded-lg bg-wire/10 px-4 py-2.5 text-sm font-medium text-wire transition-colors hover:bg-wire/20 disabled:opacity-50"
                 >
                   {verify.method === "call" && verify.status === "sending" ? (
                     <Loader2 className="h-4 w-4 animate-spin" />
@@ -404,7 +451,7 @@ export default function OnboardingFlow() {
                   type="button"
                   onClick={startSmsVerification}
                   disabled={verify.status === "sending"}
-                  className="flex flex-1 items-center justify-center gap-2 rounded-lg bg-brand-500/10 px-4 py-2.5 text-sm font-medium text-brand-300 transition-colors hover:bg-brand-500/20 disabled:opacity-50"
+                  className="flex flex-1 items-center justify-center gap-2 rounded-lg bg-wire/10 px-4 py-2.5 text-sm font-medium text-wire transition-colors hover:bg-wire/20 disabled:opacity-50"
                 >
                   {verify.method === "sms" && verify.status === "sending" ? (
                     <Loader2 className="h-4 w-4 animate-spin" />
@@ -428,7 +475,7 @@ export default function OnboardingFlow() {
                     type="button"
                     onClick={confirmSmsCode}
                     disabled={smsCode.length !== 6}
-                    className="rounded-lg bg-brand-500 px-4 py-2.5 text-sm font-semibold text-white disabled:opacity-50"
+                    className="ios-pill-primary px-4 py-2.5 text-sm disabled:opacity-50"
                   >
                     Verify
                   </button>
@@ -438,7 +485,7 @@ export default function OnboardingFlow() {
               {verify.message && (
                 <p
                   className={`text-xs ${
-                    verify.status === "error" ? "text-red-400" : "text-slate-400"
+                    verify.status === "error" ? "text-danger" : "text-ink-2"
                   }`}
                 >
                   {verify.message}
@@ -448,9 +495,9 @@ export default function OnboardingFlow() {
           )}
         </div>
 
-        <div className="mt-6 space-y-3 rounded-2xl border border-white/10 bg-[#161a24] p-5">
-          <p className="text-sm font-semibold text-white">Start your 3-day free trial</p>
-          <p className="text-xs text-slate-400">
+        <div className="mt-6 space-y-3 rounded-2xl border border-separator bg-white p-5 shadow-sm">
+          <p className="text-sm font-semibold text-ink">Start your 3-day free trial</p>
+          <p className="text-xs text-ink-2">
             A payment method is collected securely by Dodo Payments. You will not be charged today.
           </p>
           <input
@@ -476,14 +523,14 @@ export default function OnboardingFlow() {
             maxLength={2}
             className={inputClass}
           />
-          {billingError && <p className="text-sm text-red-400">{billingError}</p>}
+          {billingError && <p className="text-sm text-danger">{billingError}</p>}
         </div>
 
         <div className="mt-6 flex gap-3">
           <button
             type="button"
             onClick={() => setStep(1)}
-            className="flex items-center gap-2 rounded-lg border border-white/10 bg-white/5 px-4 py-2.5 text-sm font-medium text-slate-300 transition-colors hover:bg-white/10"
+            className="flex items-center gap-2 rounded-lg border border-separator bg-white px-4 py-2.5 text-sm font-medium text-ink-2 transition-colors hover:bg-black/[0.03]"
           >
             <ArrowLeft className="h-4 w-4" />
             Back
@@ -492,7 +539,7 @@ export default function OnboardingFlow() {
             type="button"
             onClick={confirmSetup}
             disabled={confirming}
-            className="flex flex-1 items-center justify-center gap-2 rounded-lg bg-brand-500 px-4 py-2.5 text-sm font-semibold text-white shadow-lg shadow-brand-500/20 transition-colors hover:bg-brand-400 disabled:opacity-50"
+            className="ios-pill-primary flex-1 px-4 py-2.5 text-sm disabled:opacity-50"
           >
             {confirming ? (
               <>
@@ -513,34 +560,34 @@ export default function OnboardingFlow() {
 
   return (
     <div className="mx-auto flex min-h-[70vh] max-w-lg flex-col items-center justify-center px-4 text-center">
-      <div className="flex h-16 w-16 items-center justify-center rounded-2xl bg-brand-500/10 text-brand-400">
+      <div className="flex h-16 w-16 items-center justify-center rounded-2xl bg-wire/10 text-wire">
         <PartyPopper className="h-8 w-8" />
       </div>
-      <h1 className="mt-6 text-2xl font-bold tracking-tight text-white">
+      <h1 className="mt-6 text-2xl font-bold tracking-tight text-ink">
         You&apos;re all set!
       </h1>
-      <p className="mt-3 text-sm leading-relaxed text-slate-400">
+      <p className="mt-3 text-sm leading-relaxed text-ink-2">
         Your free trial began on{" "}
-        <b className="text-slate-200">
+        <b className="text-ink">
           {trial ? new Date(trial.start).toLocaleDateString() : "the server-confirmed date"}
         </b>{" "}
         and ends on{" "}
-        <b className="text-slate-200">
+        <b className="text-ink">
           {trial ? new Date(trial.end).toLocaleDateString() : "the server-confirmed date"}
         </b>
-        . CallFlow is now watching <b className="text-slate-200">{CALLFLOW_NUMBER}</b>.
+        . CallFlow is now watching <b className="text-ink">{CALLFLOW_NUMBER}</b>.
       </p>
       <div className="mt-8 flex w-full flex-col gap-3 sm:flex-row sm:justify-center">
         <Link
           href="/calls"
-          className="inline-flex items-center justify-center gap-2 rounded-lg bg-brand-500 px-6 py-3 text-sm font-semibold text-white shadow-lg shadow-brand-500/20 transition-colors hover:bg-brand-400"
+          className="ios-pill-primary px-6 py-3 text-sm"
         >
           <Phone className="h-4 w-4" />
           Go to dashboard
         </Link>
         <Link
           href="/"
-          className="inline-flex items-center justify-center gap-2 rounded-lg border border-white/10 bg-white/5 px-6 py-3 text-sm font-medium text-slate-300 transition-colors hover:bg-white/10"
+          className="inline-flex items-center justify-center gap-2 rounded-lg border border-separator bg-white px-6 py-3 text-sm font-medium text-ink-2 transition-colors hover:bg-black/[0.03]"
         >
           <CheckCircle2 className="h-4 w-4" />
           Back to home

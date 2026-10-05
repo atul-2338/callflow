@@ -1,9 +1,9 @@
 import Navigation from "@/components/Navigation";
 
 /**
- * LEGACY dark app shell (calls, settings, contacts, setup).
- * Intentionally kept dark until the Phase 5 iOS rebuild — the design
- * tokens it relies on are preserved in globals.css.
+ * iOS-light app shell (calls, settings, contacts, setup) — matches the
+ * Phase 5 dashboard at /app. Marketing pages keep the dark navy + gold
+ * theme via the (marketing) layout.
  */
 export default function AppGroupLayout({
   children,
@@ -11,7 +11,7 @@ export default function AppGroupLayout({
   children: React.ReactNode;
 }) {
   return (
-    <div className="min-h-screen bg-[#0f1117] text-slate-200">
+    <div className="min-h-screen bg-[#f2f2f7] text-ink">
       <Navigation />
       <main className="flex-1">{children}</main>
     </div>

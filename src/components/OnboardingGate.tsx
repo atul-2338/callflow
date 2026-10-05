@@ -24,7 +24,7 @@ export default function OnboardingGate({
   if (loading) {
     return (
       <div className="flex min-h-[70vh] items-center justify-center">
-        <Loader2 className="h-8 w-8 animate-spin text-gold-400" />
+        <Loader2 className="h-8 w-8 animate-spin text-wire" />
       </div>
     );
   }

@@ -129,25 +129,24 @@ export default function SettingsPanel() {
     }
   }
 
-  const field =
-    "w-full rounded-lg border border-white/10 bg-white/5 px-3.5 py-2.5 text-sm text-white placeholder-slate-500 shadow-sm focus:border-brand-500 focus:outline-none focus:ring-2 focus:ring-brand-500/30";
+  const field = "ios-field";
 
   return (
     <div className="mx-auto max-w-3xl px-4 py-8 sm:px-6 lg:px-8">
-      <h1 className="text-2xl font-bold tracking-tight text-white">Settings</h1>
-      <p className="mt-1 text-sm text-slate-500">
+      <h1 className="text-2xl font-bold tracking-tight text-ink">Settings</h1>
+      <p className="mt-1 text-sm text-ink-3">
         Keep your business details and preferences up to date.
       </p>
 
       <div className="mt-8 space-y-6">
-        <section className="rounded-2xl border border-white/10 bg-[#161a24] p-6 shadow-lg shadow-black/20">
+        <section className="rounded-2xl bg-white p-6 shadow-sm">
           <div className="mb-4 flex items-center gap-2.5">
-            <Building2 className="h-5 w-5 text-brand-400" />
-            <h2 className="text-base font-semibold text-white">Business information</h2>
+            <Building2 className="h-5 w-5 text-wire" />
+            <h2 className="text-base font-semibold text-ink">Business information</h2>
           </div>
           <div className="grid gap-4 sm:grid-cols-2">
             <div className="sm:col-span-2">
-              <label className="mb-1 block text-sm font-medium text-slate-300">
+              <label className="mb-1 block text-sm font-medium text-ink-2">
                 Business name
               </label>
               <input
@@ -158,7 +157,7 @@ export default function SettingsPanel() {
               />
             </div>
             <div>
-              <label className="mb-1 block text-sm font-medium text-slate-300">
+              <label className="mb-1 block text-sm font-medium text-ink-2">
                 Business phone
               </label>
               <input
@@ -169,7 +168,7 @@ export default function SettingsPanel() {
               />
             </div>
             <div>
-              <label className="mb-1 block text-sm font-medium text-slate-300">Email</label>
+              <label className="mb-1 block text-sm font-medium text-ink-2">Email</label>
               <input
                 className={field}
                 type="email"
@@ -179,7 +178,7 @@ export default function SettingsPanel() {
               />
             </div>
             <div className="sm:col-span-2">
-              <label className="mb-1 block text-sm font-medium text-slate-300">
+              <label className="mb-1 block text-sm font-medium text-ink-2">
                 Address
               </label>
               <input
@@ -192,41 +191,41 @@ export default function SettingsPanel() {
           </div>
         </section>
 
-        <section className="rounded-2xl border border-white/10 bg-[#161a24] p-6 shadow-lg shadow-black/20">
+        <section className="rounded-2xl bg-white p-6 shadow-sm">
           <div className="mb-4 flex items-center gap-2.5">
-            <PhoneForwarded className="h-5 w-5 text-brand-400" />
-            <h2 className="text-base font-semibold text-white">Call forwarding</h2>
+            <PhoneForwarded className="h-5 w-5 text-wire" />
+            <h2 className="text-base font-semibold text-ink">Call forwarding</h2>
           </div>
-          <div className="flex items-center justify-between gap-4 rounded-xl bg-white/5 p-4">
+          <div className="flex items-center justify-between gap-4 rounded-xl bg-[#fafafa] p-4">
             <div>
-              <p className="text-sm font-medium text-slate-300">Forward missed calls to</p>
-              <p className="text-lg font-bold tracking-tight text-white">
+              <p className="text-sm font-medium text-ink-2">Forward missed calls to</p>
+              <p className="text-lg font-bold tracking-tight text-ink">
                 +1 (888) 545-9969
               </p>
             </div>
-            <div className="hidden items-center gap-2 text-xs text-slate-500 sm:flex">
+            <div className="hidden items-center gap-2 text-xs text-ink-3 sm:flex">
               <Phone className="h-4 w-4" />
               Status: active
             </div>
           </div>
-          <p className="mt-3 text-xs text-slate-500">
+          <p className="mt-3 text-xs text-ink-3">
             Set this number as your “when unanswered / busy” forwarding target in your
             phone&apos;s call settings.
           </p>
         </section>
 
-        <section className="rounded-2xl border border-white/10 bg-[#161a24] p-6 shadow-lg shadow-black/20">
+        <section className="rounded-2xl bg-white p-6 shadow-sm">
           <div className="mb-4 flex items-center gap-2.5">
-            <Bell className="h-5 w-5 text-brand-400" />
-            <h2 className="text-base font-semibold text-white">Notifications</h2>
+            <Bell className="h-5 w-5 text-wire" />
+            <h2 className="text-base font-semibold text-ink">Notifications</h2>
           </div>
           <div className="space-y-3">
-            <label className="flex items-center justify-between gap-4 rounded-xl border border-white/10 bg-white/5 p-4 transition-colors hover:bg-white/[0.07]">
+            <label className="flex items-center justify-between gap-4 rounded-xl border border-separator bg-white p-4 transition-colors hover:bg-black/[0.03]">
               <div className="flex items-center gap-3">
-                <Mail className="h-5 w-5 text-slate-500" />
+                <Mail className="h-5 w-5 text-ink-3" />
                 <div>
-                  <p className="text-sm font-medium text-slate-200">Email me on missed calls</p>
-                  <p className="text-xs text-slate-500">
+                  <p className="text-sm font-medium text-ink">Email me on missed calls</p>
+                  <p className="text-xs text-ink-3">
                     A transcript lands in your inbox the moment a voicemail is recorded.
                   </p>
                 </div>
@@ -235,15 +234,15 @@ export default function SettingsPanel() {
                 type="checkbox"
                 checked={prefs.notifyEmail}
                 onChange={(e) => setPrefs({ ...prefs, notifyEmail: e.target.checked })}
-                className="h-5 w-5 accent-brand-500"
+                className="h-5 w-5 accent-gold"
               />
             </label>
-            <label className="flex items-center justify-between gap-4 rounded-xl border border-white/10 bg-white/5 p-4 transition-colors hover:bg-white/[0.07]">
+            <label className="flex items-center justify-between gap-4 rounded-xl border border-separator bg-white p-4 transition-colors hover:bg-black/[0.03]">
               <div className="flex items-center gap-3">
-                <MessageSquare className="h-5 w-5 text-slate-500" />
+                <MessageSquare className="h-5 w-5 text-ink-3" />
                 <div>
-                  <p className="text-sm font-medium text-slate-200">Text me a summary</p>
-                  <p className="text-xs text-slate-500">
+                  <p className="text-sm font-medium text-ink">Text me a summary</p>
+                  <p className="text-xs text-ink-3">
                     Get the caller number and a short summary as an SMS.
                   </p>
                 </div>
@@ -252,23 +251,23 @@ export default function SettingsPanel() {
                 type="checkbox"
                 checked={prefs.notifySms}
                 onChange={(e) => setPrefs({ ...prefs, notifySms: e.target.checked })}
-                className="h-5 w-5 accent-brand-500"
+                className="h-5 w-5 accent-gold"
               />
             </label>
           </div>
         </section>
 
         {billing && (
-          <section className="rounded-2xl border border-white/10 bg-[#161a24] p-6 shadow-lg shadow-black/20">
+          <section className="rounded-2xl bg-white p-6 shadow-sm">
             <div className="mb-4 flex items-center gap-2.5">
-              <CreditCard className="h-5 w-5 text-brand-400" />
-              <h2 className="text-base font-semibold text-white">Plan &amp; billing</h2>
+              <CreditCard className="h-5 w-5 text-wire" />
+              <h2 className="text-base font-semibold text-ink">Plan &amp; billing</h2>
             </div>
             <div className="flex flex-wrap items-baseline justify-between gap-2">
-              <p className="text-sm font-medium text-slate-200">CallFlow Solo</p>
-              <p className="text-xs text-slate-500">$49 / month after the trial</p>
+              <p className="text-sm font-medium text-ink">CallFlow Solo</p>
+              <p className="text-xs text-ink-3">$49 / month after the trial</p>
             </div>
-            <p className="mt-2 text-sm text-slate-400">
+            <p className="mt-2 text-sm text-ink-2">
               {BILLING_COPY[billing.access.state]}
               {billing.trialEndsAt
                 ? ` · through ${new Date(billing.trialEndsAt).toLocaleDateString()}`
@@ -279,7 +278,7 @@ export default function SettingsPanel() {
                 type="button"
                 onClick={openBillingPortal}
                 disabled={openingPortal}
-                className="mt-4 inline-flex items-center gap-2 rounded-lg bg-brand-500 px-4 py-2.5 text-sm font-semibold text-white shadow-lg shadow-brand-500/20 transition-colors hover:bg-brand-400 disabled:opacity-50"
+                className="ios-pill-primary mt-4 px-4 py-2.5 text-sm disabled:opacity-50"
               >
                 {openingPortal ? (
                   <Loader2 className="h-4 w-4 animate-spin" />
@@ -291,33 +290,33 @@ export default function SettingsPanel() {
             ) : (
               <Link
                 href="/onboarding"
-                className="mt-4 inline-flex items-center gap-2 rounded-lg bg-brand-500 px-4 py-2.5 text-sm font-semibold text-white shadow-lg shadow-brand-500/20 transition-colors hover:bg-brand-400"
+                className="ios-pill-primary mt-4 px-4 py-2.5 text-sm"
               >
                 Continue checkout
               </Link>
             )}
-            {billingError && <p className="mt-3 text-sm text-red-400">{billingError}</p>}
-            <p className="mt-3 text-xs leading-relaxed text-slate-500">
+            {billingError && <p className="mt-3 text-sm text-danger">{billingError}</p>}
+            <p className="mt-3 text-xs leading-relaxed text-ink-3">
               Billing runs through Dodo Payments. Cancelling stops future charges
               and keeps access until the end of any period already paid for.
             </p>
           </section>
         )}
 
-        <section className="rounded-2xl border border-white/10 bg-[#161a24] p-6 shadow-lg shadow-black/20">
+        <section className="rounded-2xl bg-white p-6 shadow-sm">
           <div className="mb-4 flex items-center gap-2.5">
-            <Smartphone className="h-5 w-5 text-brand-400" />
-            <h2 className="text-base font-semibold text-white">Device credentials</h2>
+            <Smartphone className="h-5 w-5 text-wire" />
+            <h2 className="text-base font-semibold text-ink">Device credentials</h2>
           </div>
           <div className="space-y-4">
             <div>
-              <label className="mb-1 block text-sm font-medium text-slate-300">
+              <label className="mb-1 block text-sm font-medium text-ink-2">
                 App auth token
               </label>
-              <div className="flex items-center gap-2 rounded-lg border border-white/10 bg-white/5 px-3 py-2.5">
-                <KeyRound className="h-4 w-4 text-slate-500" />
+              <div className="flex items-center gap-2 rounded-lg border border-separator bg-white px-3 py-2.5">
+                <KeyRound className="h-4 w-4 text-ink-3" />
                 <input
-                  className="w-full bg-transparent text-sm text-white placeholder-slate-500 focus:outline-none"
+                  className="w-full bg-transparent text-sm text-ink placeholder:text-ink-3 focus:outline-none"
                   type="password"
                   value={authToken}
                   onChange={(e) => setAuthTokenInput(e.target.value)}
@@ -326,13 +325,13 @@ export default function SettingsPanel() {
               </div>
             </div>
             <div>
-              <label className="mb-1 block text-sm font-medium text-slate-300">
+              <label className="mb-1 block text-sm font-medium text-ink-2">
                 FCM device token
               </label>
-              <div className="flex items-center gap-2 rounded-lg border border-white/10 bg-white/5 px-3 py-2.5">
-                <Smartphone className="h-4 w-4 text-slate-500" />
+              <div className="flex items-center gap-2 rounded-lg border border-separator bg-white px-3 py-2.5">
+                <Smartphone className="h-4 w-4 text-ink-3" />
                 <input
-                  className="w-full bg-transparent text-sm text-white placeholder-slate-500 focus:outline-none"
+                  className="w-full bg-transparent text-sm text-ink placeholder:text-ink-3 focus:outline-none"
                   value={fcmToken}
                   onChange={(e) => setFcmTokenInput(e.target.value)}
                   placeholder="Firebase push token"
@@ -344,7 +343,7 @@ export default function SettingsPanel() {
 
         <div className="flex items-center justify-end gap-3">
           {saved && (
-            <span className="flex items-center gap-1.5 text-sm font-medium text-brand-400">
+            <span className="flex items-center gap-1.5 text-sm font-medium text-wire">
               <Save className="h-4 w-4" />
               Saved
             </span>
@@ -352,7 +351,7 @@ export default function SettingsPanel() {
           <button
             type="button"
             onClick={save}
-            className="rounded-lg bg-brand-500 px-5 py-2.5 text-sm font-semibold text-white shadow-lg shadow-brand-500/20 transition-colors hover:bg-brand-400"
+            className="ios-pill-primary px-5 py-2.5 text-sm"
           >
             Save changes
           </button>

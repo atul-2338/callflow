@@ -5,11 +5,11 @@ import { PhoneCall, RefreshCw } from "lucide-react";
 import type { Call } from "@/lib/types";
 
 const statusStyles: Record<string, string> = {
-  answered: "bg-green-500/15 text-green-400",
-  missed: "bg-red-500/15 text-red-400",
-  busy: "bg-amber-500/15 text-amber-400",
-  failed: "bg-red-500/15 text-red-400",
-  voicemail_left: "bg-gold-500/15 text-gold-400",
+  answered: "bg-booked/10 text-[#1f8a3b]",
+  missed: "bg-danger/10 text-danger",
+  busy: "bg-callback/12 text-[#b25e00]",
+  failed: "bg-danger/10 text-danger",
+  voicemail_left: "bg-gold/15 text-gold-strong",
 };
 
 export default function CallLogs() {
@@ -56,7 +56,7 @@ export default function CallLogs() {
         <select
           value={filter}
           onChange={(e) => setFilter(e.target.value)}
-          className="rounded-lg border border-navy-600 bg-navy-800 px-3 py-2 text-sm text-white focus:border-gold-400 focus:outline-none"
+          className="rounded-lg border border-separator bg-white px-3 py-2 text-sm text-ink focus:border-wire focus:outline-none focus:ring-2 focus:ring-wire/20"
         >
           <option value="">All calls</option>
           <option value="answered">Answered</option>
@@ -67,31 +67,31 @@ export default function CallLogs() {
         </select>
         <button
           onClick={load}
-          className="flex items-center gap-2 self-start rounded-lg border border-navy-600 px-4 py-2 text-sm font-medium text-slate-300 hover:bg-navy-800"
+          className="flex items-center gap-2 self-start rounded-lg border border-separator bg-white px-4 py-2 text-sm font-medium text-ink-2 transition hover:bg-black/[0.03]"
         >
           <RefreshCw className="h-4 w-4" />
           Refresh
         </button>
       </div>
 
-      <div className="overflow-hidden rounded-xl border border-navy-700 bg-navy-900 shadow-sm">
+      <div className="overflow-hidden rounded-2xl bg-white shadow-sm">
         <div className="overflow-x-auto">
           <table className="w-full">
             <thead>
-              <tr className="border-b border-navy-700 bg-navy-800/60">
-                <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-400">
+              <tr className="border-b border-separator bg-black/[0.02]">
+                <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-ink-3">
                   Caller
                 </th>
-                <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-400">
+                <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-ink-3">
                   Status
                 </th>
-                <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-400">
+                <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-ink-3">
                   Started
                 </th>
-                <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-400">
+                <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-ink-3">
                   Duration
                 </th>
-                <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-400">
+                <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-ink-3">
                   Voicemail
                 </th>
               </tr>
@@ -99,45 +99,45 @@ export default function CallLogs() {
             <tbody>
               {loading ? (
                 <tr>
-                  <td colSpan={5} className="px-4 py-12 text-center text-slate-500">
+                  <td colSpan={5} className="px-4 py-12 text-center text-ink-3">
                     Loading call logs...
                   </td>
                 </tr>
               ) : calls.length === 0 ? (
                 <tr>
-                  <td colSpan={5} className="px-4 py-12 text-center text-slate-500">
+                  <td colSpan={5} className="px-4 py-12 text-center text-ink-3">
                     No call logs yet.
                   </td>
                 </tr>
               ) : (
                 calls.map((call) => (
-                  <tr key={call.id} className="border-b border-navy-800 hover:bg-navy-800/40">
+                  <tr key={call.id} className="border-b border-separator hover:bg-black/[0.02]">
                     <td className="px-4 py-4">
-                      <div className="flex items-center gap-2 font-medium text-white">
-                        <PhoneCall className="h-4 w-4 text-slate-500" />
+                      <div className="flex items-center gap-2 font-medium text-ink">
+                        <PhoneCall className="h-4 w-4 text-ink-3" />
                         {call.callerNumber || "Unknown"}
                       </div>
                     </td>
                     <td className="px-4 py-4">
                       <span
                         className={`inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 text-xs font-medium ${
-                          statusStyles[call.callStatus] || "bg-slate-500/15 text-slate-400"
+                          statusStyles[call.callStatus] || "bg-ink/6 text-ink-3"
                         }`}
                       >
                         {call.callStatus.replace("_", " ")}
                       </span>
                     </td>
-                    <td className="px-4 py-4 text-sm text-slate-400">
+                    <td className="px-4 py-4 text-sm text-ink-2">
                       {new Date(call.callStartedAt).toLocaleString()}
                     </td>
-                    <td className="px-4 py-4 text-sm text-slate-400">
+                    <td className="px-4 py-4 text-sm text-ink-2">
                       {call.durationSeconds != null ? `${call.durationSeconds}s` : "—"}
                     </td>
                     <td className="max-w-xs px-4 py-4">
                       {call.callStatus === "voicemail_left" ? (
                         <div className="space-y-1">
                           {call.transcript && (
-                            <p className="truncate text-sm text-slate-300" title={call.transcript}>
+                            <p className="truncate text-sm text-ink-2" title={call.transcript}>
                               &ldquo;{call.transcript}&rdquo;
                             </p>
                           )}
@@ -146,14 +146,14 @@ export default function CallLogs() {
                               href={call.recordingUrl}
                               target="_blank"
                               rel="noreferrer"
-                              className="text-xs text-gold-400 hover:underline"
+                              className="text-xs text-wire hover:underline"
                             >
                               Listen to recording
                             </a>
                           )}
                         </div>
                       ) : (
-                        <span className="text-sm text-slate-500">—</span>
+                        <span className="text-sm text-ink-3">—</span>
                       )}
                     </td>
                   </tr>

@@ -61,11 +61,11 @@ export default function Onboarding({ onComplete }: OnboardingProps) {
   if (creating) {
     return (
       <div className="flex min-h-[70vh] flex-col items-center justify-center text-center">
-        <Loader2 className="h-10 w-10 animate-spin text-gold-400" />
-        <h2 className="mt-6 text-2xl font-semibold text-white">
+        <Loader2 className="h-10 w-10 animate-spin text-wire" />
+        <h2 className="mt-6 text-2xl font-semibold text-ink">
           Creating dashboard for {createdName}
         </h2>
-        <p className="mt-2 text-sm text-slate-400">
+        <p className="mt-2 text-sm text-ink-2">
           Setting up your call & messaging workspace...
         </p>
       </div>
@@ -74,73 +74,73 @@ export default function Onboarding({ onComplete }: OnboardingProps) {
 
   return (
     <div className="flex min-h-[70vh] items-center justify-center">
-      <div className="w-full max-w-md rounded-2xl border border-navy-700 bg-navy-900 p-8 shadow-2xl">
+      <div className="w-full max-w-md rounded-2xl bg-white p-8 shadow-sm">
         <div className="mb-6 flex items-center gap-3">
-          <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-gold-500/15 text-gold-400">
+          <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-wire/10 text-wire">
             <Building2 className="h-6 w-6" />
           </div>
           <div>
-            <h1 className="text-xl font-semibold text-white">Welcome to CallFlow</h1>
-            <p className="text-sm text-slate-400">Set up your workspace to get started</p>
+            <h1 className="text-xl font-semibold text-ink">Welcome to CallFlow</h1>
+            <p className="text-sm text-ink-2">Set up your workspace to get started</p>
           </div>
         </div>
 
         <form onSubmit={handleSubmit} className="space-y-4">
           <div>
-            <label className="mb-1 block text-sm font-medium text-slate-300">Name</label>
+            <label className="mb-1 block text-sm font-medium text-ink-2">Name</label>
             <input
               type="text"
               required
               value={name}
               onChange={(e) => setName(e.target.value)}
-              className="w-full rounded-lg border border-navy-600 bg-navy-800 px-3 py-2 text-sm text-white placeholder-slate-500 focus:border-gold-400 focus:outline-none focus:ring-2 focus:ring-gold-400/20"
+              className="ios-field"
               placeholder="e.g. Acme Consulting"
             />
           </div>
 
           <div>
-            <label className="mb-1 block text-sm font-medium text-slate-300">Phone Number</label>
+            <label className="mb-1 block text-sm font-medium text-ink-2">Phone Number</label>
             <input
               type="tel"
               required
               value={phone}
               onChange={(e) => setPhone(e.target.value)}
-              className="w-full rounded-lg border border-navy-600 bg-navy-800 px-3 py-2 text-sm text-white placeholder-slate-500 focus:border-gold-400 focus:outline-none focus:ring-2 focus:ring-gold-400/20"
+              className="ios-field"
               placeholder="+1 555 123 4567"
             />
           </div>
 
           <div>
-            <label className="mb-1 block text-sm font-medium text-slate-300">
-              Address <span className="text-slate-500">(optional)</span>
+            <label className="mb-1 block text-sm font-medium text-ink-2">
+              Address <span className="text-ink-3">(optional)</span>
             </label>
             <input
               type="text"
               value={address}
               onChange={(e) => setAddress(e.target.value)}
-              className="w-full rounded-lg border border-navy-600 bg-navy-800 px-3 py-2 text-sm text-white placeholder-slate-500 focus:border-gold-400 focus:outline-none focus:ring-2 focus:ring-gold-400/20"
+              className="ios-field"
               placeholder="Street, City, State"
             />
           </div>
 
           <div>
-            <label className="mb-1 block text-sm font-medium text-slate-300">Email ID</label>
+            <label className="mb-1 block text-sm font-medium text-ink-2">Email ID</label>
             <input
               type="email"
               value={email}
               onChange={(e) => setEmail(e.target.value)}
-              className="w-full rounded-lg border border-navy-600 bg-navy-800 px-3 py-2 text-sm text-white placeholder-slate-500 focus:border-gold-400 focus:outline-none focus:ring-2 focus:ring-gold-400/20"
+              className="ios-field"
               placeholder="you@company.com"
             />
           </div>
 
           {error && (
-            <p className="rounded-lg bg-red-500/10 px-3 py-2 text-sm text-red-400">{error}</p>
+            <p className="rounded-lg bg-danger/10 px-3 py-2 text-sm text-danger">{error}</p>
           )}
 
           <button
             type="submit"
-            className="flex w-full items-center justify-center gap-2 rounded-lg bg-gold-500 px-4 py-2.5 text-sm font-semibold text-navy-950 hover:bg-gold-400 disabled:opacity-50"
+            className="ios-pill-primary w-full px-4 py-2.5 text-sm"
           >
             <Phone className="h-4 w-4" />
             Get Started
