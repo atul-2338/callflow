@@ -9,7 +9,7 @@
     "dev": "next dev",
     "tunnel": "cloudflared tunnel --url http://localhost:3000",
     "build": "next build",
-    "start": "next start",
+    "start": "node -e \"const{execSync}=require('child_process');const port=3000;let k=0;if(process.platform==='win32'){try{const out=execSync('netstat -ano | findstr :'+port+' | findstr LISTENING').toString();const pids=[...new Set(out.split('\\n').map(function(l){return l.trim().split(' ').filter(Boolean).pop()}).filter(function(p){return p&&p!=='0'}))];pids.forEach(function(pid){try{execSync('taskkill /F /T /PID '+pid);k++}catch(e){}})}catch(e){}}else{try{execSync('fuser -k '+port+'/tcp');k++}catch(e){}}console.log('[npm start] cleared port '+port+' ('+k+' listener(s) killed)');\" && next start -p 3000",
     "lint": "eslint",
     "test": "vitest run",
     "test-email": "node scripts/test-email.cjs",
