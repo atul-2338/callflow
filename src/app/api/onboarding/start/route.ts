@@ -13,9 +13,12 @@ export async function OPTIONS(request: Request) {
   return corsPreflightResponse(request);
 }
 
-// Self-serve onboarding: the owner enables call forwarding through their
-// phone's own settings menu. No MMI codes. Verification is explicit and
-// separate: a silent test call (/api/onboarding/verify) or an SMS code
+// Self-serve onboarding: saves the owner's personal number as the Destination
+// Number (businesses.phoneNumber) plus their carrier, so step 2 can show the
+// carrier-specific forwarding dial code (src/lib/forwarding-codes.ts). This
+// endpoint places no live calls. Completion is explicit and separate: the
+// owner attests they dialed the code (/api/onboarding/complete), or proves it
+// server-side via a silent test call (/api/onboarding/verify) or an SMS code
 // (/api/onboarding/verify-sms + /api/onboarding/confirm-sms).
 export async function POST(request: Request) {
   const preflight = handlePreflight(request);

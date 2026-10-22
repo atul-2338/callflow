@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { AlertCircle, CheckCircle2, Loader2, RefreshCw } from "lucide-react";
 import type { BillingAccessState } from "@/lib/billing";
 
@@ -10,19 +11,29 @@ import type { BillingAccessState } from "@/lib/billing";
  *
  * Dodo appends `?status=success|failed&session_id=...` to the return URL, and
  * that is treated as a *display hint only*: nothing here grants access. The
- * single source of truth is `/api/me`, which reports what the signature-verified
- * webhook has already written to the database. So this page polls it.
+ * source of truth is `POST /api/billing/confirm`, which reports what the
+ * signature-verified webhook has already written to the database and — while a
+ * checkout is still unconfirmed — double-checks the subscription's status
+ * against Dodo's own API and applies it through the same trusted webhook write
+ * path. So a webhook that loses the race against the redirect (or is lost
+ * entirely) cannot leave a paying customer guessing. This page polls it.
  *
- * The webhook usually wins the race within a couple of seconds; if it has not
- * arrived by the timeout we say so honestly instead of pretending the trial
- * started, and offer a retry plus a link back into checkout.
+ * The webhook usually wins within a couple of seconds; if nothing has confirmed
+ * by the timeout we say so honestly instead of pretending the trial started,
+ * and offer a retry (which re-asks Dodo directly) plus a link back into
+ * checkout.
  */
 
 const POLL_INTERVAL_MS = 2000;
 const POLL_TIMEOUT_MS = 60_000;
+/** After this many polls (~16s) the pending card admits it is taking long. */
+const SLOW_AFTER_POLLS = 8;
+/** Once confirmed, hand the owner to the final forwarding step automatically. */
+const REDIRECT_DELAY_MS = 2000;
 
 type MeResponse = {
   subscriptionStatus: string;
+  subscriptionId: string | null;
   trialStartedAt: string | null;
   trialEndsAt: string | null;
   access: { state: BillingAccessState; entitled: boolean };
@@ -41,20 +52,30 @@ function formatDate(value: string | null): string {
 }
 
 export default function CheckoutReturn() {
+  const router = useRouter();
   const [phase, setPhase] = useState<Phase>("verifying");
   const [me, setMe] = useState<MeResponse | null>(null);
   const [attemptedSessionId, setAttemptedSessionId] = useState<string | null>(null);
   // Fixed when the component mounts: polling gives up after the timeout and then
-  // tells the truth instead of spinning forever.
-  const [deadline] = useState(() => Date.now() + POLL_TIMEOUT_MS);
+  // tells the truth instead of spinning forever. A manual "Check again" resets
+  // it, so retrying always gets a full fresh window.
+  const [deadline, setDeadline] = useState(() => Date.now() + POLL_TIMEOUT_MS);
+  // Poll counter: drives the "this is taking longer than usual" copy. Setting
+  // state on every poll also forces a render so that copy can appear even while
+  // the phase itself is unchanged.
+  const [attempts, setAttempts] = useState(0);
 
   const check = useCallback(async () => {
-    const response = await fetch("/api/me", { cache: "no-store" });
+    const response = await fetch("/api/billing/confirm", {
+      method: "POST",
+      cache: "no-store",
+    });
 
     // Dodo's query params are read after the await: they only inform the copy,
     // and touching them here keeps server and client markup identical.
     const params = new URLSearchParams(window.location.search);
     setAttemptedSessionId(params.get("session_id"));
+    setAttempts((count) => count + 1);
     const declinedByRedirect = params.get("status") === "failed";
 
     if (response.status === 401 || response.status === 404) {
@@ -103,27 +124,58 @@ export default function CheckoutReturn() {
     };
   }, [phase, check]);
 
+  // Confirmed → go to the wizard's final forwarding step automatically — the
+  // dashboard is only reachable after the owner interacts with that step
+  // (they must dial the forwarding code and confirm). ?forwarding=1 tells the
+  // wizard to resume from its saved signup state instead of restarting.
+  // Only on success: pending, declined, unconfirmed, and signed-out owners
+  // stay on this page. The explicit link below remains as a fallback.
+  useEffect(() => {
+    if (phase !== "confirmed") return;
+    const timer = setTimeout(
+      () => router.push("/onboarding?forwarding=1"),
+      REDIRECT_DELAY_MS
+    );
+    return () => clearTimeout(timer);
+  }, [phase, router]);
+
   const trialEndsAt = me?.trialEndsAt ?? null;
+  const slow = attempts >= SLOW_AFTER_POLLS;
 
   if (phase === "confirmed") {
     return (
       <Shell
         tone="success"
-        title="You're in."
+        title="Payment confirmed"
         body={
-          trialEndsAt ? (
-            <>
-              Your 3-day free trial runs until{" "}
-              <b className="text-ink">{formatDate(trialEndsAt)}</b>, then Solo bills
-              $49/month. Cancel any time before then and you are never charged.
-            </>
-          ) : (
-            <>Your subscription is active. Head to your dashboard to finish setup.</>
-          )
+          <>
+            Your Solo plan is active — $49/month.{" "}
+            {trialEndsAt ? (
+              <>
+                Your 3-day free trial runs until{" "}
+                <b className="text-ink">{formatDate(trialEndsAt)}</b>; cancel any
+                time before then and you are never charged.
+              </>
+            ) : (
+              <>You can start using Callflow right away.</>
+            )}
+          </>
         }
       >
-        <Link href="/app" className="ios-pill-primary w-full px-4 py-3.5 text-[15px]">
-          Go to my dashboard
+        {me?.subscriptionId ? (
+          <p className="text-xs text-ink-2">
+            Subscription <span className="font-mono">{me.subscriptionId}</span> · verified with
+            Dodo
+          </p>
+        ) : null}
+        <p className="text-sm font-medium text-ink" aria-live="polite">
+          Payment confirmed — taking you to your final setup step…
+        </p>
+        <Link
+          href="/onboarding?forwarding=1"
+          className="ios-pill-primary w-full px-4 py-3.5 text-[15px]"
+        >
+          Finish setting up call forwarding
         </Link>
         <Link
           href="/setup"
@@ -140,7 +192,7 @@ export default function CheckoutReturn() {
       <Shell
         tone="danger"
         title="That payment didn't go through"
-        body="No charge was made. Your details are still here — start checkout again and try a different card or payment method."
+        body="Dodo reported the payment as unsuccessful, so your trial was not started and you have not been charged. Your details are still saved — start checkout again and try a different card or payment method."
       >
         <Link href="/onboarding" className="ios-pill-primary w-full px-4 py-3.5 text-[15px]">
           Try checkout again
@@ -170,9 +222,10 @@ export default function CheckoutReturn() {
         title="Still waiting on Dodo's confirmation"
         body={
           <>
-            Your payment page closed, but the signed confirmation webhook has not
-            reached CallFlow yet, so your trial is not active. If you already paid,
-            we will switch you on the moment it lands — check back in a minute.
+            Your payment page closed, but the signed confirmation has not reached
+            CallFlow yet, so your trial is not active. If you already paid, your
+            subscription switches on the moment it lands — checking again asks
+            Dodo&apos;s servers directly.
             {attemptedSessionId && me?.checkoutSessionId &&
             attemptedSessionId !== me.checkoutSessionId
               ? " (Note: this return link belongs to an earlier checkout attempt.)"
@@ -182,6 +235,8 @@ export default function CheckoutReturn() {
         actionLabel="Check again"
         actionIcon={<RefreshCw className="h-4 w-4" />}
         onAction={() => {
+          setDeadline(Date.now() + POLL_TIMEOUT_MS);
+          setAttempts(0);
           setPhase("verifying");
         }}
       >
@@ -199,7 +254,27 @@ export default function CheckoutReturn() {
     <Shell
       tone="pending"
       title="Confirming your payment"
-      body="Dodo is finalizing your subscription. This usually takes a few seconds — access switches on as soon as we have the signed confirmation, not before."
+      body={
+        slow ? (
+          <>
+            Dodo is finalizing your subscription. This is taking longer than usual — we keep
+            verifying directly against Dodo&apos;s servers, and your trial is anchored to when you
+            paid, so nothing is lost by waiting.
+          </>
+        ) : (
+          "Dodo is finalizing your subscription. This usually takes a few seconds — access switches on as soon as we have the signed confirmation, not before."
+        )
+      }
+      actionLabel={slow ? "Check again" : undefined}
+      actionIcon={slow ? <RefreshCw className="h-4 w-4" /> : undefined}
+      onAction={
+        slow
+          ? () => {
+              setAttempts(0);
+              void check();
+            }
+          : undefined
+      }
     >
       <div className="h-1.5 w-full overflow-hidden rounded-full bg-black/10">
         <div className="h-full w-1/2 animate-pulse rounded-full bg-gold" />
@@ -263,4 +338,3 @@ function Shell({
     </div>
   );
 }
-

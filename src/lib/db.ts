@@ -9,11 +9,13 @@ import type {
   ClientProfile,
   Contact,
   ContactStatus,
+  FollowUpStatus,
   ForwardingStatus,
   Settings,
 } from "./types";
-import { CALL_OUTCOMES } from "./types";
+import { CALL_OUTCOMES, FOLLOW_UP_STATUSES } from "./types";
 import { getDb } from "./database";
+import { generateClientUid } from "./util";
 
 const DEFAULT_SETTINGS: Settings = {
   missedCallReplyTemplate:
@@ -22,10 +24,14 @@ const DEFAULT_SETTINGS: Settings = {
 };
 
 type ContactRow = Omit<Contact, "status"> & { status: string };
-type CallRow = Omit<Call, "callStatus" | "textBackSent" | "outcome"> & {
+type CallRow = Omit<
+  Call,
+  "callStatus" | "textBackSent" | "outcome" | "followUpStatus"
+> & {
   callStatus: string;
   textBackSent: number;
   outcome: string | null;
+  followUpStatus: string;
 };
 
 function mapContact(row: ContactRow): Contact {
@@ -40,6 +46,11 @@ function mapCall(row: CallRow): Call {
     outcome: CALL_OUTCOMES.includes(row.outcome as CallOutcome)
       ? (row.outcome as CallOutcome)
       : "other",
+    followUpStatus: FOLLOW_UP_STATUSES.includes(
+      row.followUpStatus as FollowUpStatus
+    )
+      ? (row.followUpStatus as FollowUpStatus)
+      : "none",
   };
 }
 
@@ -248,11 +259,19 @@ export async function getCalls(): Promise<Call[]> {
 }
 
 export async function addCall(
-  data: Omit<Call, "id" | "createdAt" | "updatedAt">
+  data: Omit<
+    Call,
+    "id" | "createdAt" | "updatedAt" | "followUpStatus" | "followUpNotes" | "followUpUpdatedAt"
+  > &
+    Partial<Pick<Call, "followUpStatus" | "followUpNotes" | "followUpUpdatedAt">>
 ): Promise<Call> {
   const now = new Date().toISOString();
   const call: Call = {
     ...data,
+    // Fresh calls always start with an untouched follow-up workflow.
+    followUpStatus: data.followUpStatus ?? "none",
+    followUpNotes: data.followUpNotes ?? "",
+    followUpUpdatedAt: data.followUpUpdatedAt ?? null,
     id: randomUUID(),
     createdAt: now,
     updatedAt: now,
@@ -268,14 +287,18 @@ export async function addCall(
          callStartedAt, callEndedAt, durationSeconds, textBackSent,
          textBackSentAt, signalwireCallSid, recordingUrl, transcript,
          dograhRunId, dograhDeliveryId, dograhDisposition, outcome,
-         customerName, calendarEventId, transcriptUrl,
+         customerName, callbackNumber, calendarEventId, transcriptUrl,
+         serviceRequested, urgency, preferredCallbackTime,
+         followUpStatus, followUpNotes, followUpUpdatedAt,
          createdAt, updatedAt
        ) VALUES (
          @id, @businessId, @callerNumber, @businessNumber, @callStatus,
          @callStartedAt, @callEndedAt, @durationSeconds, @textBackSent,
          @textBackSentAt, @signalwireCallSid, @recordingUrl, @transcript,
          @dograhRunId, @dograhDeliveryId, @dograhDisposition, @outcome,
-         @customerName, @calendarEventId, @transcriptUrl,
+         @customerName, @callbackNumber, @calendarEventId, @transcriptUrl,
+         @serviceRequested, @urgency, @preferredCallbackTime,
+         @followUpStatus, @followUpNotes, @followUpUpdatedAt,
          @createdAt, @updatedAt
        )`
     )
@@ -308,6 +331,10 @@ export async function updateCall(
          durationSeconds = @durationSeconds, textBackSent = @textBackSent,
          textBackSentAt = @textBackSentAt, signalwireCallSid = @signalwireCallSid,
          recordingUrl = @recordingUrl, transcript = @transcript,
+         serviceRequested = @serviceRequested, urgency = @urgency,
+         preferredCallbackTime = @preferredCallbackTime,
+         followUpStatus = @followUpStatus, followUpNotes = @followUpNotes,
+         followUpUpdatedAt = @followUpUpdatedAt,
          updatedAt = @updatedAt
        WHERE id = @id`
     )
@@ -315,11 +342,43 @@ export async function updateCall(
   return updated;
 }
 
-async function getCallById(id: string): Promise<Call | null> {
+export async function getCallById(id: string): Promise<Call | null> {
   const row = getDb()
     .prepare("SELECT * FROM calls WHERE id = ?")
     .get(id) as CallRow | undefined;
   return row ? mapCall(row) : null;
+}
+
+/**
+ * Owner follow-up workflow on a call: mark it needed/resolved (or clear back
+ * to none) and record free-form notes. Stamps followUpUpdatedAt so the
+ * dashboard can show when the owner last touched it. Notes are appended-only
+ * in the sense that passing no notes keeps whatever is stored.
+ */
+export async function setCallFollowUp(
+  id: string,
+  data: { status: FollowUpStatus; notes?: string }
+): Promise<Call | null> {
+  const existing = await getCallById(id);
+  if (!existing) return null;
+  const now = new Date().toISOString();
+  return updateCall(id, {
+    followUpStatus: data.status,
+    followUpNotes: data.notes ?? existing.followUpNotes,
+    followUpUpdatedAt: now,
+  });
+}
+
+/** All calls for one business, newest first (tenant-scoped dashboard reads). */
+export async function getCallsForBusiness(
+  businessId: string
+): Promise<Call[]> {
+  const rows = getDb()
+    .prepare(
+      "SELECT * FROM calls WHERE businessId = ? ORDER BY callStartedAt DESC"
+    )
+    .all(businessId) as unknown as CallRow[];
+  return rows.map(mapCall);
 }
 
 export async function getCallBySignalwireSid(
@@ -408,10 +467,38 @@ export async function getBusinessByPhone(
   return rows.map(mapBusiness).find((b) => normalizePhone(b.phoneNumber) === normalized);
 }
 
+/**
+ * Find a business by its billing name — case-insensitive, surrounding
+ * whitespace ignored. Backs the duplicate-name guard in createBillingSignup
+ * and the wizard's Step-1 pre-check endpoint. `excludeId` lets an existing
+ * business keep its own name when it re-submits signup.
+ */
+export async function getBusinessByName(
+  name: string,
+  excludeId?: string
+): Promise<Business | undefined> {
+  const trimmed = name.trim();
+  if (!trimmed) return undefined;
+  const row = excludeId
+    ? (getDb()
+        .prepare(
+          `SELECT * FROM businesses
+           WHERE LOWER(TRIM(billingName)) = LOWER(TRIM(?)) AND id != ?`
+        )
+        .get(trimmed, excludeId) as BusinessRow | undefined)
+    : (getDb()
+        .prepare(
+          `SELECT * FROM businesses WHERE LOWER(TRIM(billingName)) = LOWER(TRIM(?))`
+        )
+        .get(trimmed) as BusinessRow | undefined);
+  return row ? mapBusiness(row) : undefined;
+}
+
 export async function createBusiness(
   data: Omit<
     Business,
     | "id"
+    | "clientUid"
     | "createdAt"
     | "updatedAt"
     | "billingName"
@@ -425,6 +512,7 @@ export async function createBusiness(
     | "subscriptionPaymentId"
     | "smsVerificationCode"
     | "smsVerificationExpiresAt"
+    | "notificationEmail"
   > &
     Partial<
       Pick<
@@ -440,12 +528,30 @@ export async function createBusiness(
         | "subscriptionPaymentId"
         | "smsVerificationCode"
         | "smsVerificationExpiresAt"
+        | "notificationEmail"
       >
     >
 ): Promise<Business> {
   const now = new Date().toISOString();
+
+  // The client UID is permanent, so it is assigned exactly once here.
+  // Retry in the unlikely event of a collision with an existing row; the
+  // partial unique index idx_businesses_client_uid is the storage backstop.
+  let clientUid = "";
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    const candidate = generateClientUid();
+    if (!getDb().prepare("SELECT 1 FROM businesses WHERE clientUid = ?").get(candidate)) {
+      clientUid = candidate;
+      break;
+    }
+  }
+  if (!clientUid) {
+    throw new Error("Could not generate a unique client UID. Please try again.");
+  }
+
   const business: Business = {
     ...data,
+    clientUid,
     billingName: data.billingName ?? null,
     billingEmail: data.billingEmail ?? null,
     billingCountry: data.billingCountry ?? null,
@@ -457,6 +563,7 @@ export async function createBusiness(
     subscriptionPaymentId: data.subscriptionPaymentId ?? null,
     smsVerificationCode: data.smsVerificationCode ?? null,
     smsVerificationExpiresAt: data.smsVerificationExpiresAt ?? null,
+    notificationEmail: data.notificationEmail ?? null,
     id: randomUUID(),
     createdAt: now,
     updatedAt: now,
@@ -464,19 +571,19 @@ export async function createBusiness(
   getDb()
     .prepare(
       `INSERT INTO businesses (
-         id, phoneNumber, carrier, forwardingStatus, lastVerifiedAt,
+         id, clientUid, phoneNumber, carrier, forwardingStatus, lastVerifiedAt,
          pendingVerificationFor, pendingVerificationExpiresAt, billingName,
          billingEmail, billingCountry, trialStartedAt, dodoCustomerId,
          dodoSubscriptionId, dodoCheckoutSessionId, subscriptionStatus,
          subscriptionPaymentId, smsVerificationCode, smsVerificationExpiresAt,
-         createdAt, updatedAt
+         notificationEmail, createdAt, updatedAt
        ) VALUES (
-         @id, @phoneNumber, @carrier, @forwardingStatus, @lastVerifiedAt,
+         @id, @clientUid, @phoneNumber, @carrier, @forwardingStatus, @lastVerifiedAt,
          @pendingVerificationFor, @pendingVerificationExpiresAt, @billingName,
          @billingEmail, @billingCountry, @trialStartedAt, @dodoCustomerId,
          @dodoSubscriptionId, @dodoCheckoutSessionId, @subscriptionStatus,
          @subscriptionPaymentId, @smsVerificationCode, @smsVerificationExpiresAt,
-         @createdAt, @updatedAt
+         @notificationEmail, @createdAt, @updatedAt
        )`
     )
     .run(business);
@@ -510,6 +617,8 @@ export async function updateBusiness(
          subscriptionPaymentId = @subscriptionPaymentId,
          smsVerificationCode = @smsVerificationCode,
          smsVerificationExpiresAt = @smsVerificationExpiresAt,
+         notificationEmail = @notificationEmail,
+         address = @address,
          updatedAt = @updatedAt
         WHERE id = @id`
     )

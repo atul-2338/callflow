@@ -8,7 +8,7 @@ import { handleDograhWebhook } from "@/lib/dograh-webhook";
  * Configure in the Dograh workflow editor:
  *   URL:     https://<your-host>/api/webhooks/dograh?key=<DOGRAH_WEBHOOK_SECRET>
  *   Method:  POST
- *   Headers: X-Callflow-Secret: <DOGRAH_WEBHOOK_SECRET> (custom header)
+ *   Headers: X-Webhook-Secret: <DOGRAH_WEBHOOK_SECRET> (or X-Callflow-Secret)
  *   Body:    the Callflow payload template (see README "Dograh webhook").
  *
  * Responses: 200 = stored/duplicate (stop retries), 4xx = permanent failure

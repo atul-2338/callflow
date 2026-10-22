@@ -28,7 +28,7 @@ const body = {
       call_leg_id: "sim-leg-1",
       call_session_id: "sim-session-1",
       from: "+15550001111",
-      to: "+18885459969",
+      to: "+19283319394",
       direction: "inbound",
       state: "initiated",
     },

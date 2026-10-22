@@ -1,15 +1,24 @@
 import { NextResponse } from "next/server";
 import { getClientProfile, saveClientProfile } from "@/lib/db";
-import { isAuthorized, unauthorizedResponse } from "@/lib/auth";
+import { businessIdFromCookieHeader } from "@/lib/business-session";
 import { isValidPhone } from "@/lib/util";
 
-export async function GET() {
+export async function GET(request: Request) {
+  const businessId = businessIdFromCookieHeader(request.headers.get("cookie"));
+  if (!businessId) {
+    return NextResponse.json({ error: "unauthorized" }, { status: 401 });
+  }
+
   const profile = await getClientProfile();
   return NextResponse.json(profile);
 }
 
 export async function POST(request: Request) {
-  if (!isAuthorized(request)) return unauthorizedResponse();
+  const businessId = businessIdFromCookieHeader(request.headers.get("cookie"));
+  if (!businessId) {
+    return NextResponse.json({ error: "unauthorized" }, { status: 401 });
+  }
+
   try {
     const body = await request.json();
     const { name, phone, address, email } = body;

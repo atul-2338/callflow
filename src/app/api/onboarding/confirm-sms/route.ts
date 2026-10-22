@@ -5,6 +5,7 @@ import {
   getBusinessByPhone,
   setBusinessForwardingStatus,
 } from "@/lib/db";
+import { clientIp, rateLimit } from "@/lib/rate-limit";
 import { applyCors, corsPreflightResponse, handlePreflight } from "@/lib/cors";
 
 export async function OPTIONS(request: Request) {
@@ -45,6 +46,21 @@ export async function POST(request: Request) {
     if (!business) {
       return applyCors(
         NextResponse.json({ error: "Business not found" }, { status: 404 }),
+        request
+      );
+    }
+
+    // The code is single-use with a 10-minute expiry, but guessing is still a
+    // thing — cap verification attempts per business and per client IP.
+    const businessLimit = rateLimit(`confirm-sms:${business.id}`, 10, 15 * 60 * 1000);
+    const ipLimit = rateLimit(`confirm-sms:ip:${clientIp(request)}`, 20, 15 * 60 * 1000);
+    const limit = businessLimit.allowed ? ipLimit : businessLimit;
+    if (!limit.allowed) {
+      return applyCors(
+        NextResponse.json(
+          { error: "Too many verification attempts. Request a new code in a few minutes." },
+          { status: 429, headers: { "Retry-After": String(limit.retryAfterSeconds) } }
+        ),
         request
       );
     }

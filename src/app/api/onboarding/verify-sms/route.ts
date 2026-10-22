@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { getBusinessById, getBusinessByPhone, setSmsVerificationCode } from "@/lib/db";
 import { generateVerificationCode, isSmsConfigured, sendSms } from "@/lib/sms";
+import { clientIp, rateLimit } from "@/lib/rate-limit";
 import { applyCors, corsPreflightResponse, handlePreflight } from "@/lib/cors";
 
 export async function OPTIONS(request: Request) {
@@ -30,6 +31,20 @@ export async function POST(request: Request) {
     if (!business) {
       return applyCors(
         NextResponse.json({ error: "Business not found" }, { status: 404 }),
+        request
+      );
+    }
+
+    // Paid SMS — cap per business and per client IP.
+    const businessLimit = rateLimit(`verify-sms:${business.id}`, 3, 15 * 60 * 1000);
+    const ipLimit = rateLimit(`verify-sms:ip:${clientIp(request)}`, 10, 15 * 60 * 1000);
+    const limit = businessLimit.allowed ? ipLimit : businessLimit;
+    if (!limit.allowed) {
+      return applyCors(
+        NextResponse.json(
+          { error: "Too many verification codes sent. Try again in a few minutes." },
+          { status: 429, headers: { "Retry-After": String(limit.retryAfterSeconds) } }
+        ),
         request
       );
     }

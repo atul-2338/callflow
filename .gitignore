@@ -83,3 +83,19 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# local run/agent logs (repo root)
+/*.log
+
+# local audit reports (contain real customer phone numbers — not for public repos,
+# same policy as /project-status.log)
+/audit-report*.html
+
+# local ops notes
+/DOGRAH_SETUP.txt
+
+# local memory bank + agent config (same policy as /worklog-*.md and /.kilo/)
+/activeContext.md
+/devlog.md
+/.clinerules/
+/.clineignore

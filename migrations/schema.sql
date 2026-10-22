@@ -57,15 +57,27 @@ CREATE TABLE IF NOT EXISTS calls (
   dograhDisposition TEXT,
   outcome TEXT,
   customerName TEXT,
+  callbackNumber TEXT,
   calendarEventId TEXT,
   transcriptUrl TEXT,
+  serviceRequested TEXT,
+  urgency TEXT,
+  preferredCallbackTime TEXT,
+  followUpStatus TEXT NOT NULL DEFAULT 'none',
+  followUpNotes TEXT NOT NULL DEFAULT '',
+  followUpUpdatedAt TEXT,
   createdAt TEXT NOT NULL,
   updatedAt TEXT NOT NULL
 );
 
--- Call-forwarding onboarding/verification per business.
+-- Call-forwarding onboarding/verification per business. phoneNumber is the
+-- "Destination Number": the owner's personal phone that their carrier
+-- forwards unanswered calls FROM, to the CallFlow number.
 CREATE TABLE IF NOT EXISTS businesses (
   id TEXT PRIMARY KEY,
+  -- Permanent public identifier ("TE-" + 8 hex chars) assigned once at
+  -- creation and never rotated (generateClientUid in src/lib/util.ts).
+  clientUid TEXT,
   phoneNumber TEXT NOT NULL,
   carrier TEXT NOT NULL DEFAULT 'other',
   forwardingStatus TEXT NOT NULL DEFAULT 'not_started',
@@ -83,6 +95,12 @@ CREATE TABLE IF NOT EXISTS businesses (
   subscriptionPaymentId TEXT,
   smsVerificationCode TEXT,
   smsVerificationExpiresAt TEXT,
+  -- Business address (Settings → Business information → Address). Free-form
+  -- text; NULL until the owner saves one.
+  address TEXT,
+  -- Owner alert email (Settings → Business information → Email). New-call
+  -- alert emails are sent here (src/lib/email.ts + dograh-webhook.ts).
+  notificationEmail TEXT,
   createdAt TEXT NOT NULL,
   updatedAt TEXT NOT NULL
 );
@@ -107,8 +125,13 @@ CREATE INDEX IF NOT EXISTS idx_contacts_phone ON contacts(phone);
 CREATE INDEX IF NOT EXISTS idx_activity_contact ON activity_logs(contactId);
 CREATE INDEX IF NOT EXISTS idx_calls_status ON calls(callStatus);
 CREATE INDEX IF NOT EXISTS idx_calls_started ON calls(callStartedAt);
+CREATE INDEX IF NOT EXISTS idx_calls_followup ON calls(followUpStatus);
 CREATE INDEX IF NOT EXISTS idx_businesses_phone ON businesses(phoneNumber);
 CREATE INDEX IF NOT EXISTS idx_businesses_status ON businesses(forwardingStatus);
+-- One client UID per business. Partial so legacy NULL rows (before the
+-- backfill in src/lib/database.ts) can coexist during the migration window.
+CREATE UNIQUE INDEX IF NOT EXISTS idx_businesses_client_uid
+  ON businesses(clientUid) WHERE clientUid IS NOT NULL;
 CREATE UNIQUE INDEX IF NOT EXISTS idx_businesses_dodo_customer
   ON businesses(dodoCustomerId) WHERE dodoCustomerId IS NOT NULL;
 CREATE UNIQUE INDEX IF NOT EXISTS idx_businesses_dodo_subscription
@@ -121,4 +144,3 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_calls_dograh_run ON calls(dograhRunId)
   WHERE dograhRunId IS NOT NULL;
 CREATE UNIQUE INDEX IF NOT EXISTS idx_calls_dograh_delivery ON calls(dograhDeliveryId)
   WHERE dograhDeliveryId IS NOT NULL;
-

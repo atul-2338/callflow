@@ -1,4 +1,6 @@
 import { NextResponse } from "next/server";
+import { setBusinessForwardingStatus } from "@/lib/db";
+import { matchDograhBusiness } from "@/lib/dograh-webhook";
 import {
   getTelnyxConfig,
   parseTelnyxEvent,
@@ -21,11 +23,21 @@ export const runtime = "nodejs";
  * number (TELNYX_FORWARD_TO) with the original caller's number as the caller
  * ID. The agent then answers the forwarded call and runs the Dograh workflow.
  *
- * Telnyx does not use the response body for Call Control events, so every
- * acknowledged event returns 200 — including events we ignore (hangup,
- * playback, ...) and transfer failures (a 5xx would only make Telnyx
- * redeliver the same event, and the command_id already makes the retry a
- * no-op).
+ * The transfer is also the forwarding-confirmation trigger: a call that
+ * arrives on the Telnyx number and is accepted for transfer to the agent is
+ * live proof that the owner's carrier forwarding works end to end, so the
+ * attributed business (Dograh convention: direct match on the dialled number,
+ * then the single-business fallback) has its forwardingStatus flipped to
+ * "active". A failed transfer answers 500 instead — the status stays
+ * "pending" and Telnyx redelivers the event so the transfer can be retried.
+ *
+ * Response codes:
+ * - 200 — the event was handled: ignored event types (hangup, playback, ...),
+ *   an unconfigured TELNYX_FORWARD_TO, or a transfer Telnyx accepted.
+ * - 500 — the transfer command failed. Telnyx redelivers 5xx events, and the
+ *   command_id derived from the event id keeps that redelivery safe: Telnyx
+ *   ignores a duplicate command within 60 seconds, so a transfer that actually
+ *   went through is never executed twice.
  */
 
 let warnedOnce = false;
@@ -100,17 +112,46 @@ export async function POST(request: Request) {
   );
 
   if (!result.ok) {
+    // The transfer failed — answer 500 so Telnyx redelivers the event and this
+    // handler retries with the same command_id (a no-op if the transfer did go
+    // through). forwarding_status deliberately stays "pending": only a
+    // transfer Telnyx accepted may confirm forwarding as active.
     console.error("[telnyx-answer] transfer command failed", {
       callControlId: event.callControlId,
       caller: event.from,
       error: result.error,
     });
-  } else {
-    console.info("[telnyx-answer] transferred inbound call to the agent", {
-      callControlId: event.callControlId,
-      caller: event.from,
-      result: result.result,
+    return new NextResponse("Internal Server Error", { status: 500 });
+  }
+
+  console.info("[telnyx-answer] transferred inbound call to the agent", {
+    callControlId: event.callControlId,
+    caller: event.from,
+    result: result.result,
+  });
+
+  // Telnyx accepted the transfer — the owner's carrier forwarding demonstrably
+  // works end to end. Attribute the call with the Dograh convention (direct
+  // match on the dialled number, then the single-business fallback) and
+  // confirm that specific business's forwarding. An unattributed call (no
+  // match and more than one business) flips nothing. If the DB write itself
+  // throws, the handler answers 500 and Telnyx's redelivery retries it.
+  const business = await matchDograhBusiness(event.to);
+  if (business) {
+    await setBusinessForwardingStatus(
+      business.id,
+      "active",
+      new Date().toISOString()
+    );
+    console.info("[telnyx-answer] forwarding confirmed by successful transfer", {
+      businessId: business.id,
+      dialledNumber: event.to,
     });
+  } else {
+    console.warn(
+      "[telnyx-answer] transfer succeeded but the call is unattributed — no forwarding_status update",
+      { dialledNumber: event.to, caller: event.from }
+    );
   }
 
   return new NextResponse("OK", { status: 200 });

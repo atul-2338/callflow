@@ -66,6 +66,18 @@ export const CALL_OUTCOMES = [
 
 export type CallOutcome = (typeof CALL_OUTCOMES)[number];
 
+/** Owner-facing follow-up workflow state for a call.
+ * - none:    no action taken yet (default for every inbound call)
+ * - needed:  the owner marked this call for follow-up
+ * - resolved: the owner closed it out (notes record what happened) */
+export const FOLLOW_UP_STATUSES = [
+  "none",
+  "needed",
+  "resolved",
+] as const;
+
+export type FollowUpStatus = (typeof FOLLOW_UP_STATUSES)[number];
+
 export interface Call {
   id: string;
   businessId: string | null;
@@ -89,7 +101,19 @@ export interface Call {
   dograhDisposition: string | null;
   outcome: CallOutcome | null;
   customerName: string | null;
+  /** Number to call the customer back on — the caller number itself when the
+   * webhook sent no separate callback number (see dograh-webhook.ts). */
+  callbackNumber: string | null;
   calendarEventId: string | null;
+  /** Structured job details the agent gathered, when available. Each stays
+   * null when the call never captured it — the UI says so honestly. */
+  serviceRequested: string | null;
+  urgency: string | null;
+  preferredCallbackTime: string | null;
+  /** Owner's follow-up workflow state (see FOLLOW_UP_STATUSES). */
+  followUpStatus: FollowUpStatus;
+  followUpNotes: string;
+  followUpUpdatedAt: string | null;
   /** Public Dograh URL for the call transcript JSON file. */
   transcriptUrl: string | null;
   createdAt: string;
@@ -120,6 +144,13 @@ export type ForwardingStatus = (typeof FORWARDING_STATUSES)[number];
 
 export interface Business {
   id: string;
+  /**
+   * Permanent public identifier, "TE-" + 8 lowercase hex chars (e.g.
+   * "TE-9a8b7c6d"), assigned once at creation and never rotated — the stable
+   * handle for support and billing conversations. All businesses are enrolled
+   * through the trial onboarding flow, so every row carries the TE- prefix.
+   */
+  clientUid: string;
   phoneNumber: string;
   carrier: Carrier;
   forwardingStatus: ForwardingStatus;
@@ -139,6 +170,12 @@ export interface Business {
   /** 6-digit code for SMS-based forwarding verification (Phase 5). */
   smsVerificationCode: string | null;
   smsVerificationExpiresAt: string | null;
+  /** Owner alert email (Settings → Business information → Email). New-call
+   * alert emails go here; null until the owner saves one. */
+  notificationEmail: string | null;
+  /** Business address (Settings → Business information → Address). Free-form
+   * text; null in SQLite until the owner saves one. */
+  address?: string;
   createdAt: string;
   updatedAt: string;
 }

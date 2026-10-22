@@ -70,6 +70,13 @@ export function buildDograhFixture(
   if (name === "booked" || name === "callback") {
     gathered.customer_name = "Priya Raman";
   }
+  if (name === "callback") {
+    // The agent asked what the job was, how urgent, and when to call back —
+    // exactly the MVP follow-up details the dashboard surfaces.
+    gathered.service_requested = "Water heater leaking in the garage";
+    gathered.urgency = "Urgent — water spreading, customer mopping";
+    gathered.preferred_callback_time = "This afternoon after 2pm";
+  }
   if (name === "booked") {
     gathered.appointment_details = "Thu Sep 18 at 3:00 PM";
     gathered.calendar_event_id = "evt_fixture_9f2c";

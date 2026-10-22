@@ -6,7 +6,6 @@ import {
   getBusinessFcmToken,
   getCallByDograhDeliveryId,
   getCallByDograhRunId,
-  normalizePhone,
 } from "./db";
 import {
   dograhWebhookSecret,
@@ -16,8 +15,14 @@ import {
   type HeaderReader,
 } from "./dograh";
 import { sendPushNotification, type NotifyMissedCallResult } from "./firebase";
-import { getPlivoConfig } from "./plivo";
-import { getTelnyxConfig } from "./telnyx";
+import { getPublicBaseUrl } from "./plivo";
+import {
+  readSmtpConfig,
+  sendCallAlertEmail,
+  smtpConfigError,
+  type CallAlertEmailInput,
+  type EmailSendResult,
+} from "./email";
 import type { CallOutcome } from "./types";
 
 /**
@@ -55,12 +60,12 @@ async function fetchTranscriptFromUrl(url: string): Promise<string | null> {
 }
 
 /**
- * Pilot-safe business matching. Real forwarding means `called_number` is the
- * forwarding number (Plivo or Telnyx), not the business's own line — so:
- * 1. exact match on businesses.phone_number (normalized),
- * 2. call reached our forwarding number and exactly one business exists → it,
- * 3. no routing info at all and exactly one business exists → it,
- * 4. otherwise null (row is still recorded; nothing is silently dropped).
+ * Business matching for the pilot. Dograh's `called_number` is the number the
+ * caller dialled (the DID), so link the call to the business that owns it:
+ * 1. exact match on businesses.phoneNumber (normalized E.164),
+ * 2. no match and exactly one business exists → that business,
+ * 3. otherwise null (row is still recorded, unlinked) with a loud warning —
+ *    nothing is silently dropped.
  */
 export async function matchDograhBusiness(calledNumber: string) {
   if (calledNumber) {
@@ -68,17 +73,13 @@ export async function matchDograhBusiness(calledNumber: string) {
     if (direct) return direct;
   }
   const all = await getAllBusinesses();
-  const sole = all.length === 1 ? all[0] : null;
-  if (!sole) return null;
-  if (!calledNumber) return sole;
-  const forwardingNumbers = [
-    normalizePhone(getPlivoConfig().number || ""),
-    normalizePhone(getTelnyxConfig().number || ""),
-  ].filter(Boolean);
-  // No forwarding number configured (early pilot): one business, no way to
-  // misroute — match it.
-  if (forwardingNumbers.length === 0) return sole;
-  if (forwardingNumbers.includes(normalizePhone(calledNumber))) return sole;
+  if (all.length === 1) return all[0];
+  console.warn(
+    `[dograh-webhook] Call stored UNLINKED: called_number "${calledNumber || "(missing)"}" ` +
+      `matches no business's assigned number and ${all.length} businesses exist ` +
+      "(the single-business fallback needs exactly one). Save the dialled number as " +
+      "the business's phoneNumber to link calls automatically."
+  );
   return null;
 }
 
@@ -95,6 +96,11 @@ export async function handleDograhWebhook(opts: {
     body: string,
     data?: Record<string, string>
   ) => Promise<NotifyMissedCallResult>;
+  /** Injectable for tests: real SMTP sends need credentials and network. */
+  sendEmail?: (
+    input: CallAlertEmailInput,
+    to: string
+  ) => Promise<EmailSendResult>;
 }): Promise<DograhWebhookResult> {
   const { body, headers } = opts;
   const searchParams = opts.searchParams ?? new URLSearchParams();
@@ -165,8 +171,14 @@ export async function handleDograhWebhook(opts: {
       dograhDisposition: event.disposition || null,
       outcome: event.outcome,
       customerName: event.customerName,
+      // Webhook contract: an empty callback_number falls back to the caller
+      // number so the owner always has a reachable number to dial.
+      callbackNumber: event.callbackNumber || event.callerNumber || null,
       calendarEventId: event.calendarEventId,
       transcriptUrl: event.transcriptUrl,
+      serviceRequested: event.serviceRequested,
+      urgency: event.urgency,
+      preferredCallbackTime: event.preferredCallbackTime,
     });
   } catch (err) {
     // Lost a race against a concurrent duplicate delivery: surface it as the
@@ -184,14 +196,31 @@ export async function handleDograhWebhook(opts: {
 
   const fcmToken = await getBusinessFcmToken();
   const who = event.customerName || event.callerNumber || "Unknown caller";
+  // Pilot notification text: "<urgency> call from <name>: <reason>. Call back:
+  // <number>" — with honest fallbacks when the agent did not capture a field.
+  const urgencyLabel = event.urgency?.trim() || "New";
+  const reason = event.serviceRequested?.trim();
+  const callbackNumber = event.callbackNumber || event.callerNumber || "";
+  const notificationBody = reason
+    ? `${urgencyLabel} call from ${who}: ${reason}. Call back: ${callbackNumber}`
+    : `${urgencyLabel} call from ${who}. Call back: ${callbackNumber}`;
   const sendPush = opts.sendPush ?? sendPushNotification;
   const push: NotifyMissedCallResult = fcmToken
-    ? await sendPush(fcmToken, PUSH_TITLES[event.outcome], `${who} — tap to review the call`, {
+    ? await sendPush(fcmToken, PUSH_TITLES[event.outcome], notificationBody, {
         callId: call.id,
         outcome: event.outcome,
         callerNumber: event.callerNumber,
       })
     : { sent: false, error: "No FCM token configured" };
+
+  // The notification could not be delivered and this repo has no email
+  // fallback yet — say so loudly instead of failing silently. Registering an
+  // FCM device token (POST /api/settings) turns this off.
+  if (!push.sent) {
+    console.warn(
+      `[Owner notification] TODO: push not delivered (${push.error ?? "unknown error"}). Text: "${notificationBody}". No email fallback is configured — register an FCM device token via POST /api/settings to enable owner notifications.`
+    );
+  }
 
   // FCM says the token itself is dead (app uninstalled / token rotated):
   // forget it so later deliveries skip the push step instead of hammering a
@@ -201,6 +230,56 @@ export async function handleDograhWebhook(opts: {
   if (fcmToken && push.invalidToken) {
     await clearBusinessFcmToken();
     pushTokenCleared = true;
+  }
+
+  // Email alert — NEW calls only (every duplicate path above returned before
+  // the row was saved, so this code never runs for them). The recipient is
+  // the business's saved notification email (Settings → Business information
+  // → Email). NOTHING here may fail the webhook: a missing address, missing
+  // SMTP settings, SMTP errors and even a thrown library error all collapse
+  // into the 200 response below.
+  let email: EmailSendResult;
+  const alertTo = business?.notificationEmail?.trim() || "";
+  if (!alertTo) {
+    email = { sent: false, error: "No notification email saved" };
+    console.warn(
+      `[dograh-webhook] Email alert skipped: ${
+        business
+          ? "no notification email is saved for this business"
+          : "the call is unlinked, so there is no business to email"
+      }. Save the owner's email in Settings → Business information → Email.`
+    );
+  } else {
+    const smtp = readSmtpConfig();
+    if (!smtp) {
+      const reason = smtpConfigError() ?? "SMTP settings are incomplete";
+      email = { sent: false, error: `SMTP not configured: ${reason}` };
+      console.warn(
+        `[dograh-webhook] Email alert skipped: SMTP not configured (${reason}).`
+      );
+    } else {
+      const alertInput: CallAlertEmailInput = {
+        name: event.customerName ?? "",
+        urgency: event.urgency,
+        reason: event.serviceRequested,
+        callbackNumber: callbackNumber || null,
+        startedAt: call.callStartedAt,
+        recordingUrl: call.recordingUrl ?? event.recordingUrl,
+        dashboardUrl: `${getPublicBaseUrl() || "http://localhost:3000"}/calls`,
+      };
+      try {
+        email = opts.sendEmail
+          ? await opts.sendEmail(alertInput, alertTo)
+          : await sendCallAlertEmail(smtp, alertTo, alertInput);
+      } catch (err) {
+        // Belt and braces: even a thrown error from the email library must
+        // not turn the webhook response into an error.
+        email = {
+          sent: false,
+          error: err instanceof Error ? err.message : "Email send failed",
+        };
+      }
+    }
   }
 
   return {
@@ -215,6 +294,7 @@ export async function handleDograhWebhook(opts: {
       transcriptStored: Boolean(transcript),
       push,
       pushTokenCleared,
+      email,
     },
   };
 }

@@ -1,5 +1,12 @@
 import DodoPayments from "dodopayments";
-import { createBusiness, getBusinessByPhone, updateBusiness } from "./db";
+import {
+  applyDodoWebhookEvent,
+  createBusiness,
+  getBusinessById,
+  getBusinessByName,
+  getBusinessByPhone,
+  updateBusiness,
+} from "./db";
 import { toE164InternationalPhone } from "./util";
 import {
   getDodoCancelUrl,
@@ -9,6 +16,7 @@ import {
   getDodoSoloProductId,
   DODO_TRIAL_DAYS,
 } from "./dodo";
+import { isDodoSubscriptionStatus } from "./dodo-events";
 import type { Business } from "./types";
 
 const TRIAL_MS = DODO_TRIAL_DAYS * 24 * 60 * 60 * 1000;
@@ -78,6 +86,24 @@ export function describeBillingAccess(
   }
 }
 
+/**
+ * Exact, frontend-facing error for a duplicate business name. The signup
+ * route returns it as the 400 error body (with code "business_name_taken")
+ * and the wizard pre-check endpoint echoes it; both UIs surface this
+ * string under the "Your name" input. Single source of truth — never
+ * duplicate the literal elsewhere.
+ */
+export const BUSINESS_NAME_TAKEN_ERROR =
+  "This business name is already taken. Please choose another.";
+
+/** Thrown by createBillingSignup when a different business owns the name. */
+export class BusinessNameTakenError extends Error {
+  constructor(message: string = BUSINESS_NAME_TAKEN_ERROR) {
+    super(message);
+    this.name = "BusinessNameTakenError";
+  }
+}
+
 export type BillingSignupInput = {
   phoneNumber: string;
   name: string;
@@ -131,6 +157,13 @@ export interface BillingSignupResult {
   checkoutSessionId: string | null;
   /** True when a verified webhook already linked a subscription to this business. */
   alreadySubscribed: boolean;
+  /**
+   * True only when THIS request created the business row. The route mints the
+   * browser session cookie only for freshly created businesses: for an
+   * existing one, whoever typed the phone number is not proven to be the
+   * owner, and a session cookie would hand them the account.
+   */
+  created: boolean;
 }
 
 /**
@@ -173,9 +206,21 @@ export async function createBillingSignup(
       checkoutUrl: null,
       checkoutSessionId: business.dodoCheckoutSessionId,
       alreadySubscribed: true,
+      created: false,
     };
   }
 
+  // Business names must be unique across CallFlow: a different business
+  // claiming this name is a hard stop BEFORE anything is created or
+  // updated, and before any Dodo call. The business's own row (when
+  // re-signing up an existing number) is excluded, so an owner
+  // resubmitting an unchanged name still passes.
+  const nameClash = await getBusinessByName(name, business?.id);
+  if (nameClash) {
+    throw new BusinessNameTakenError();
+  }
+
+  const created = !business;
   if (!business) {
     business = await createBusiness({
       phoneNumber,
@@ -246,6 +291,7 @@ export async function createBillingSignup(
     checkoutUrl: session.checkout_url,
     checkoutSessionId: session.session_id,
     alreadySubscribed: false,
+    created,
   };
 }
 
@@ -263,4 +309,124 @@ export async function createBillingPortalLink(business: Business): Promise<strin
     { return_url: getDodoPortalReturnUrl() }
   );
   return session.link;
+}
+
+/** The slice of Dodo's subscription record reconciliation acts on. */
+export type DodoSubscriptionSummary = {
+  subscription_id: string;
+  status: string;
+  created_at: string;
+  customer: { customer_id?: string | null } | null;
+};
+
+/**
+ * Minimal structural view of the SDK's `subscriptions.list` — the only call
+ * reconciliation needs. Kept narrow so tests can stub the client without
+ * constructing a real `DodoPayments` instance.
+ */
+export interface DodoSubscriptionLookup {
+  subscriptions: {
+    list(query: { customer_id: string }): Promise<
+      | { items?: Array<DodoSubscriptionSummary> }
+      | Array<DodoSubscriptionSummary>
+      | null
+      | undefined
+    >;
+  };
+}
+
+/**
+ * Trusted server-side payment confirmation for the checkout return page.
+ *
+ * The webhook is the only writer of billing state, but a webhook can lag behind
+ * the browser redirect — or be lost entirely while the dashboard endpoint is
+ * misconfigured. This closes that gap from the trusted side: it asks Dodo's API
+ * (with the same merchant credentials that produced the webhook events) for the
+ * customer's subscriptions and applies the authoritative status through the
+ * exact write path the webhook route uses (`applyDodoWebhookEvent`), so the
+ * audit trail, idempotency rules, trial COALESCE, and the unique subscription
+ * claim all behave identically to a genuine `subscription.*` delivery.
+ *
+ * It never throws: a failed lookup (missing key, network, rate limit) keeps the
+ * current state and lets the webhook win the race later.
+ *
+ * `client` is injectable so unit tests can stub the SDK without env setup.
+ */
+export async function reconcileDodoCheckout(
+  business: Business,
+  client?: DodoSubscriptionLookup
+): Promise<Business> {
+  // Nothing to reconcile when there is no Dodo billing profile to ask about.
+  // (Whether to reconcile at all — e.g. not once the webhook has delivered a
+  // live status — is the caller's policy; see /api/billing/confirm.)
+  if (!business.dodoCustomerId) return business;
+
+  let api: DodoSubscriptionLookup | undefined = client;
+  if (!api) {
+    try {
+      api = getDodoClient();
+    } catch (error) {
+      console.warn("[dodo-billing] reconcile skipped — Dodo client unavailable", {
+        businessId: business.id,
+        message: error instanceof Error ? error.message : "unknown",
+      });
+      return business;
+    }
+  }
+
+  let subscriptions: DodoSubscriptionSummary[];
+  try {
+    const page = await api.subscriptions.list({ customer_id: business.dodoCustomerId });
+    subscriptions = Array.isArray(page) ? page : (page?.items ?? []);
+  } catch (error) {
+    console.warn("[dodo-billing] reconcile lookup failed", {
+      businessId: business.id,
+      message: error instanceof Error ? error.message : "unknown",
+    });
+    return business;
+  }
+
+  // Only subscriptions Dodo itself attributes to this customer may move this
+  // business's state. Most recent wins if a retried checkout created several.
+  const latest = subscriptions
+    .filter(
+      (sub) =>
+        typeof sub?.subscription_id === "string" &&
+        sub.subscription_id.length > 0 &&
+        sub?.customer?.customer_id === business.dodoCustomerId
+    )
+    .sort(
+      (a, b) => (Date.parse(b?.created_at ?? "") || 0) - (Date.parse(a?.created_at ?? "") || 0)
+    )[0];
+
+  // An unrecognized status string stays out of our state machine, exactly as
+  // `normalizeDodoEvent` treats unrecognized webhook payloads.
+  if (!latest || !isDodoSubscriptionStatus(latest.status)) return business;
+
+  // Dodo's own record is the trial clock: the subscription's creation is when
+  // the trial began, so mirror that instead of the reconcile arrival time. The
+  // COALESCE in the write path keeps any earlier, authoritative stamp.
+  const startTrialAt =
+    latest.status === "active" && latest.created_at ? latest.created_at : null;
+
+  await applyDodoWebhookEvent({
+    // Synthetic, self-describing id: every observation gets its own row in
+    // `dodo_webhook_events`, and a later reconcile with a changed status still
+    // applies instead of being swallowed by webhook-id idempotency.
+    webhookId: `reconcile:${latest.subscription_id}:${latest.status}:${new Date().toISOString()}`,
+    eventType: `subscription.${latest.status}`,
+    businessHint: business.id,
+    customerId: business.dodoCustomerId,
+    subscriptionId: latest.subscription_id,
+    subscriptionStatus: latest.status,
+    startTrialAt,
+  });
+
+  console.info("[dodo-billing] reconciled from Dodo API", {
+    businessId: business.id,
+    subscriptionId: latest.subscription_id,
+    status: latest.status,
+  });
+
+  return (await getBusinessById(business.id)) ?? business;
 }

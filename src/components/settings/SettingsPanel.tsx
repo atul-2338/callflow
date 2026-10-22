@@ -5,18 +5,18 @@ import Link from "next/link";
 import {
   Bell,
   Building2,
+  Check,
+  Copy,
   CreditCard,
   ExternalLink,
-  KeyRound,
   Loader2,
   Mail,
   MessageSquare,
   Phone,
   PhoneForwarded,
   Save,
-  Smartphone,
 } from "lucide-react";
-import { getAuthToken, getFcmToken, saveClientSettings, setAuthToken, setFcmToken } from "@/lib/api";
+import { saveClientSettings } from "@/lib/api";
 import type { BillingAccessState } from "@/lib/billing";
 
 interface BillingState {
@@ -67,15 +67,34 @@ function load<T>(key: string, fallback: T): T {
   }
 }
 
-export default function SettingsPanel() {
+/** E.164 → "+1 (928) 331-9394" for US numbers; the raw value otherwise. */
+function formatForwardNumber(value: string | null | undefined): string {
+  if (!value) return "—";
+  const match = /^1?(\d{3})(\d{3})(\d{4})$/.exec(value.replace(/\D/g, ""));
+  return match ? `+1 (${match[1]}) ${match[2]}-${match[3]}` : value;
+}
+
+export default function SettingsPanel({
+  forwardTo,
+  clientUid,
+}: {
+  /** The signed-in business's assigned CallFlow number (E.164), from the DB. */
+  forwardTo?: string | null;
+  /**
+   * The business's permanent public identifier ("TE-…"), assigned once at
+   * signup and never rotated. Shown read-only with a copy button.
+   */
+  clientUid?: string | null;
+}) {
   const [info, setInfo] = useState<BusinessInfo>(DEFAULT_INFO);
   const [prefs, setPrefs] = useState<Prefs>({ notifyEmail: true, notifySms: false });
-  const [authToken, setAuthTokenInput] = useState("");
-  const [fcmToken, setFcmTokenInput] = useState("");
   const [saved, setSaved] = useState(false);
+  const [saveError, setSaveError] = useState("");
   const [billing, setBilling] = useState<BillingState | null>(null);
   const [billingError, setBillingError] = useState("");
   const [openingPortal, setOpeningPortal] = useState(false);
+  // Transient "Copied" feedback for the read-only Client ID row.
+  const [uidCopied, setUidCopied] = useState(false);
 
   useEffect(() => {
     // TODO(Phase 5): replace localStorage-backed panel with DB-backed settings;
@@ -83,8 +102,6 @@ export default function SettingsPanel() {
     // eslint-disable-next-line react-hooks/set-state-in-effect
     setInfo(load(STORAGE_INFO, DEFAULT_INFO));
     setPrefs(load(STORAGE_PREFS, { notifyEmail: true, notifySms: false }));
-    setAuthTokenInput(getAuthToken());
-    setFcmTokenInput(getFcmToken());
 
     // Billing state comes from the server (it reflects Dodo's webhooks), not
     // from localStorage. 401/404 simply means this browser has no trial session.
@@ -95,6 +112,34 @@ export default function SettingsPanel() {
         setBilling((await response.json()) as BillingState);
       } catch {
         // leave the billing card hidden
+      }
+    })();
+
+    // The owner alert email and business address live in the business record
+    // (DB). The server value wins over the localStorage draft so the panel
+    // shows what is really saved for this business.
+    void (async () => {
+      try {
+        const response = await fetch("/api/settings", { cache: "no-store" });
+        if (!response.ok) return;
+        const data = (await response.json()) as {
+          notificationEmail?: string | null;
+          address?: string | null;
+        };
+        if (data.notificationEmail) {
+          setInfo((current) => ({
+            ...current,
+            email: data.notificationEmail as string,
+          }));
+        }
+        if (data.address) {
+          setInfo((current) => ({
+            ...current,
+            address: data.address as string,
+          }));
+        }
+      } catch {
+        // offline — keep the localStorage draft
       }
     })();
   }, []);
@@ -119,13 +164,18 @@ export default function SettingsPanel() {
     try {
       window.localStorage.setItem(STORAGE_INFO, JSON.stringify(info));
       window.localStorage.setItem(STORAGE_PREFS, JSON.stringify(prefs));
-      setAuthToken(authToken);
-      setFcmToken(fcmToken);
-      await saveClientSettings({ authToken, fcmToken });
+      // No authToken/fcmToken args: those Settings fields were removed, and
+      // omitting them leaves the stored tokens untouched (the API keeps the
+      // previously saved values when the keys are absent).
+      await saveClientSettings({
+        notificationEmail: info.email.trim(),
+        address: info.address.trim(),
+      });
+      setSaveError("");
       setSaved(true);
       setTimeout(() => setSaved(false), 2500);
     } catch {
-      // ignore
+      setSaveError("Could not save — check your connection and try again.");
     }
   }
 
@@ -176,6 +226,9 @@ export default function SettingsPanel() {
                 onChange={(e) => setInfo({ ...info, email: e.target.value })}
                 placeholder="you@company.com"
               />
+              <p className="mt-1 text-xs text-ink-3">
+                New-call alert emails are sent here.
+              </p>
             </div>
             <div className="sm:col-span-2">
               <label className="mb-1 block text-sm font-medium text-ink-2">
@@ -187,6 +240,42 @@ export default function SettingsPanel() {
                 onChange={(e) => setInfo({ ...info, address: e.target.value })}
                 placeholder="Street, City, State"
               />
+            </div>
+            {/* Permanent client UID — read-only. Assigned by the server at
+                signup and never rotated. */}
+            <div className="sm:col-span-2">
+              <label className="mb-1 block text-sm font-medium text-ink-2">
+                Client ID
+              </label>
+              <div className="flex items-center gap-2">
+                <input
+                  readOnly
+                  className={`${field} min-w-0 flex-1 font-mono font-semibold tracking-wide`}
+                  value={clientUid ?? ""}
+                  placeholder="—"
+                />
+                {clientUid && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      navigator.clipboard?.writeText(clientUid);
+                      setUidCopied(true);
+                      setTimeout(() => setUidCopied(false), 2000);
+                    }}
+                    className="flex shrink-0 items-center gap-1.5 rounded-lg border border-separator bg-white px-3 py-2 text-xs font-medium text-ink-2 transition-colors hover:bg-black/[0.03]"
+                  >
+                    {uidCopied ? (
+                      <Check className="h-3.5 w-3.5" />
+                    ) : (
+                      <Copy className="h-3.5 w-3.5" />
+                    )}
+                    {uidCopied ? "Copied" : "Copy"}
+                  </button>
+                )}
+              </div>
+              <p className="mt-1 text-xs text-ink-3">
+                Your permanent CallFlow reference — include it when contacting support.
+              </p>
             </div>
           </div>
         </section>
@@ -200,7 +289,7 @@ export default function SettingsPanel() {
             <div>
               <p className="text-sm font-medium text-ink-2">Forward missed calls to</p>
               <p className="text-lg font-bold tracking-tight text-ink">
-                +1 (888) 545-9969
+                {formatForwardNumber(forwardTo)}
               </p>
             </div>
             <div className="hidden items-center gap-2 text-xs text-ink-3 sm:flex">
@@ -303,45 +392,10 @@ export default function SettingsPanel() {
           </section>
         )}
 
-        <section className="rounded-2xl bg-white p-6 shadow-sm">
-          <div className="mb-4 flex items-center gap-2.5">
-            <Smartphone className="h-5 w-5 text-wire" />
-            <h2 className="text-base font-semibold text-ink">Device credentials</h2>
-          </div>
-          <div className="space-y-4">
-            <div>
-              <label className="mb-1 block text-sm font-medium text-ink-2">
-                App auth token
-              </label>
-              <div className="flex items-center gap-2 rounded-lg border border-separator bg-white px-3 py-2.5">
-                <KeyRound className="h-4 w-4 text-ink-3" />
-                <input
-                  className="w-full bg-transparent text-sm text-ink placeholder:text-ink-3 focus:outline-none"
-                  type="password"
-                  value={authToken}
-                  onChange={(e) => setAuthTokenInput(e.target.value)}
-                  placeholder="Bearer token for protected writes"
-                />
-              </div>
-            </div>
-            <div>
-              <label className="mb-1 block text-sm font-medium text-ink-2">
-                FCM device token
-              </label>
-              <div className="flex items-center gap-2 rounded-lg border border-separator bg-white px-3 py-2.5">
-                <Smartphone className="h-4 w-4 text-ink-3" />
-                <input
-                  className="w-full bg-transparent text-sm text-ink placeholder:text-ink-3 focus:outline-none"
-                  value={fcmToken}
-                  onChange={(e) => setFcmTokenInput(e.target.value)}
-                  placeholder="Firebase push token"
-                />
-              </div>
-            </div>
-          </div>
-        </section>
-
         <div className="flex items-center justify-end gap-3">
+          {saveError && (
+            <span className="text-sm font-medium text-danger">{saveError}</span>
+          )}
           {saved && (
             <span className="flex items-center gap-1.5 text-sm font-medium text-wire">
               <Save className="h-4 w-4" />

@@ -4,6 +4,7 @@ import {
   setBusinessForwardingStatus,
 } from "@/lib/db";
 import { applyCors, corsPreflightResponse, handlePreflight } from "@/lib/cors";
+import { businessIdFromCookieHeader } from "@/lib/business-session";
 
 type RouteContext = { params: Promise<{ businessId: string }> };
 
@@ -36,11 +37,20 @@ export async function GET(request: Request, context: RouteContext) {
       if (updated) business.forwardingStatus = updated.forwardingStatus;
     }
 
+    // phone_number/carrier are the owner's PII: include them only when the
+    // request carries a valid business session for THIS business. Other
+    // callers (e.g. the wizard's forwarding-status polling) still get the
+    // status fields they read.
+    const isOwner =
+      businessIdFromCookieHeader(request.headers.get("cookie")) === businessId;
+
     return applyCors(
       NextResponse.json({
         businessId: business.id,
-        phone_number: business.phoneNumber,
-        carrier: business.carrier,
+        ...(isOwner && {
+          phone_number: business.phoneNumber,
+          carrier: business.carrier,
+        }),
         forwarding_status: business.forwardingStatus,
         last_verified_at: business.lastVerifiedAt,
       }),

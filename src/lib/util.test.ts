@@ -7,6 +7,7 @@ import {
   isValidInternationalPhone,
   toE164InternationalPhone,
   digitCount,
+  generateClientUid,
 } from "./util";
 import { toE164 } from "./db";
 
@@ -146,5 +147,16 @@ describe("toE164InternationalPhone", () => {
 describe("digitCount", () => {
   it("counts only digits", () => {
     expect(digitCount("+1 (555) 123-4567")).toBe(11);
+  });
+});
+
+describe("generateClientUid", () => {
+  it("matches the documented TE- + 8 lowercase hex shape", () => {
+    expect(generateClientUid()).toMatch(/^TE-[0-9a-f]{8}$/);
+  });
+
+  it("generates a fresh random value on every call", () => {
+    const uids = new Set(Array.from({ length: 1000 }, () => generateClientUid()));
+    expect(uids.size).toBe(1000);
   });
 });

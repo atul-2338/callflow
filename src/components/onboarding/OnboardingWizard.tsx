@@ -1,7 +1,8 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import {
   ArrowLeft,
   ArrowRight,
@@ -10,6 +11,7 @@ import {
   Phone,
 } from "lucide-react";
 import { toE164InternationalPhone } from "@/lib/util";
+import CarrierForwardingStep from "./CarrierForwardingStep";
 
 const INDUSTRIES = [
   "Plumbing",
@@ -31,6 +33,25 @@ const CARRIERS = [
   "UScellular",
   "Other / MVNO",
 ];
+
+// Step-3 hand-off state — written by StepTwo before the checkout redirect and
+// consumed (once) by the resume effect when CheckoutReturn sends the owner
+// back with ?forwarding=1.
+const WIZARD_STORAGE_KEY = "callflow_wizard_state";
+
+/** Wizard step-1 carrier labels -> carrier codes the forwarding step uses. */
+function wizardCarrierFromLabel(label: string): string {
+  switch (label) {
+    case "Verizon":
+      return "verizon";
+    case "T-Mobile":
+      return "tmobile";
+    case "AT&T":
+      return "att";
+    default:
+      return "other";
+  }
+}
 
 const COUNTRIES = ["US", "CA", "GB", "AU", "IN", "DE", "FR"];
 
@@ -68,7 +89,7 @@ function validate(f: FormState): Errors {
  * reports `subscription.active`, so our trial window matches Dodo's billing.
  */
 export default function OnboardingWizard() {
-  const [step, setStep] = useState<1 | 2>(1);
+  const [step, setStep] = useState<1 | 2 | 3>(1);
   const [form, setForm] = useState<FormState>({
     name: "",
     industry: "",
@@ -78,17 +99,148 @@ export default function OnboardingWizard() {
     country: "US",
   });
   const [errors, setErrors] = useState<Errors>({});
+  const [businessId, setBusinessId] = useState<string | null>(null);
+  const [wizardCarrier, setWizardCarrier] = useState("other");
+  const [confirmed, setConfirmed] = useState(false);
+  // True while the Step-1 name pre-check round-trip is in flight.
+  const [checkingName, setCheckingName] = useState(false);
+  const router = useRouter();
 
   function update<K extends keyof FormState>(key: K, value: string) {
     setForm((f) => ({ ...f, [key]: value }));
     if (errors[key]) setErrors((e) => ({ ...e, [key]: undefined }));
   }
 
-  function handleContinue(e: React.FormEvent) {
+  // Step-1 → Step-2 transition. After local validation, the wizard
+  // pre-checks the business name against the server (best-effort —
+  // /api/onboarding/check-name) so an already-taken name stops the owner
+  // here, before they fill the rest of the flow and get bounced through
+  // the Dodo redirect. The authoritative check still runs in
+  // createBillingSignup on /api/billing/signup before anything is created.
+  async function handleContinue(e: React.FormEvent) {
     e.preventDefault();
     const errs = validate(form);
     setErrors(errs);
-    if (Object.values(errs).every((v) => v === undefined)) setStep(2);
+    if (!Object.values(errs).every((v) => v === undefined)) return;
+
+    setCheckingName(true);
+    try {
+      const response = await fetch("/api/onboarding/check-name", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: form.name.trim() }),
+      });
+      const data = (await response.json()) as {
+        available?: boolean;
+        error?: string;
+        code?: string;
+      };
+      // A definitive "taken" is the only response that blocks: other
+      // failures (429, 5xx, network) are best-effort misses, and step 2's
+      // signup re-runs the same check atomically before creating anything.
+      if (response.status === 400 && data.code === "business_name_taken") {
+        setErrors((current) => ({
+          ...current,
+          name:
+            data.error ||
+            "This business name is already taken. Please choose another.",
+        }));
+        return;
+      }
+      setStep(2);
+    } catch {
+      // Pre-check unreachable — continue; signup is the safety net.
+    } finally {
+      setCheckingName(false);
+    }
+  }
+
+  // The authoritative duplicate-name check in /api/billing/signup rejected
+  // the name after Step 1 (it can be claimed between the pre-check and
+  // checkout): send the owner back to Step 1 and surface it under the name
+  // field.
+  function handleNameTaken(message: string) {
+    setErrors((current) => ({ ...current, name: message }));
+    setStep(1);
+  }
+
+  // Checkout hand-off: StepTwo persists the signup before redirecting to the
+  // payment provider, and CheckoutReturn sends the owner back here with
+  // ?forwarding=1. Resume at the final forwarding step instead of restarting
+  // the wizard. Consume-on-read so a refresh starts clean; the ref guard
+  // keeps StrictMode's double-invoked effect from eating the state twice.
+  const resumedRef = useRef(false);
+  useEffect(() => {
+    if (resumedRef.current) return;
+    resumedRef.current = true;
+    if (new URLSearchParams(window.location.search).get("forwarding") !== "1") {
+      return;
+    }
+    let saved: { businessId?: string; form?: FormState } | null = null;
+    try {
+      saved = JSON.parse(
+        window.localStorage.getItem(WIZARD_STORAGE_KEY) || "null"
+      ) as { businessId?: string; form?: FormState } | null;
+    } catch {
+      saved = null;
+    }
+    window.localStorage.removeItem(WIZARD_STORAGE_KEY);
+    const savedBusinessId = saved?.businessId ?? null;
+    const savedForm = saved?.form ?? null;
+    if (!savedBusinessId || !savedForm) return;
+    // Deferred one microtask so the resume setStates don't fire synchronously
+    // inside the effect body (react-hooks/set-state-in-effect). Behavior is
+    // identical — the state lands before the first paint.
+    void Promise.resolve().then(() => {
+      setBusinessId(savedBusinessId);
+      setForm((current) => ({ ...current, ...savedForm }));
+      if (savedForm.carrier) {
+        setWizardCarrier(wizardCarrierFromLabel(savedForm.carrier));
+      }
+      setStep(3);
+    });
+  }, []);
+
+  // If forwarding is already active (resumed long after checkout, or
+  // confirmed from another tab), seed the confirm state. Read-only and
+  // non-fatal — the owner can still confirm manually.
+  useEffect(() => {
+    if (step !== 3 || !businessId || confirmed) return;
+    let cancelled = false;
+    void (async () => {
+      try {
+        const response = await fetch(`/api/onboarding/status/${businessId}`, {
+          cache: "no-store",
+        });
+        if (!response.ok) return;
+        const data = (await response.json()) as { forwarding_status?: string };
+        if (!cancelled && data.forwarding_status === "active") {
+          setConfirmed(true);
+        }
+      } catch {
+        // Ignore — confirm stays manual.
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [step, businessId, confirmed]);
+
+  // The only path to the dashboard: the owner just attested they dialed the
+  // forwarding code. This replaces the auto-redirect CheckoutReturn used to
+  // do immediately after payment.
+  function handleForwardingConfirmed() {
+    setConfirmed(true);
+    router.push("/app");
+  }
+
+  // E.164 for the carrier-sync POST inside the forwarding step (null just
+  // skips the sync there — it must never block setup).
+  let stepThreePhoneE164: string | null = null;
+  try {
+    stepThreePhoneE164 = toE164InternationalPhone(form.phone, form.country);
+  } catch {
+    stepThreePhoneE164 = null;
   }
 
   return (
@@ -102,7 +254,7 @@ export default function OnboardingWizard() {
 
       <div className="mx-auto w-full max-w-md">
         <div className="mb-2 flex items-center justify-between text-sm">
-          <span className="font-semibold text-gold">Step {step} of 2</span>
+          <span className="font-semibold text-gold">Step {step} of 3</span>
           {step === 2 && (
             <button
               type="button"
@@ -117,7 +269,7 @@ export default function OnboardingWizard() {
         <div className="h-1.5 w-full overflow-hidden rounded-full bg-white/10">
           <div
             className="h-full rounded-full bg-gold transition-all duration-300"
-            style={{ width: step === 1 ? "50%" : "100%" }}
+            style={{ width: step === 1 ? "33%" : step === 2 ? "66%" : "100%" }}
           />
         </div>
 
@@ -127,9 +279,37 @@ export default function OnboardingWizard() {
             errors={errors}
             onChange={update}
             onSubmit={handleContinue}
+            checking={checkingName}
           />
+        ) : step === 2 ? (
+          <StepTwo form={form} onNameTaken={handleNameTaken} />
         ) : (
-          <StepTwo form={form} />
+          <div className="ios-card mt-6 p-6 sm:p-8">
+            <h1 className="text-2xl font-bold tracking-tight text-ink">
+              Turn on AI after-hours backup
+            </h1>
+            <p className="mt-2 text-sm leading-relaxed text-ink-2">
+              Dial the forwarding code below on the phone you registered —
+              your carrier then forwards the calls you don&apos;t answer to
+              CallFlow and our AI answers for you.
+            </p>
+            <CarrierForwardingStep
+              businessId={businessId}
+              ownerPhoneE164={stepThreePhoneE164}
+              carrier={wizardCarrier}
+              onCarrierChange={setWizardCarrier}
+              confirmed={confirmed}
+              onConfirmed={handleForwardingConfirmed}
+            />
+            {confirmed && (
+              <Link
+                href="/app"
+                className="ios-pill-primary mt-6 flex w-full items-center justify-center px-4 py-3.5 text-[15px]"
+              >
+                Go to my dashboard
+              </Link>
+            )}
+          </div>
         )}
       </div>
     </div>
@@ -159,11 +339,14 @@ function StepOne({
   errors,
   onChange,
   onSubmit,
+  checking,
 }: {
   form: FormState;
   errors: Errors;
   onChange: <K extends keyof FormState>(key: K, value: string) => void;
   onSubmit: (e: React.FormEvent) => void;
+  /** True while the name pre-check round-trip is in flight. */
+  checking?: boolean;
 }) {
   return (
     <form
@@ -246,9 +429,10 @@ function StepOne({
 
       <button
         type="submit"
-        className="ios-pill-primary w-full px-4 py-3.5 text-[15px]"
+        disabled={checking}
+        className="ios-pill-primary w-full px-4 py-3.5 text-[15px] disabled:opacity-60"
       >
-        Continue
+        {checking ? "Checking availability…" : "Continue"}
         <ArrowRight className="h-4 w-4" />
       </button>
     </form>
@@ -264,7 +448,14 @@ const PLAN_FEATURES = [
   "Cancel anytime",
 ];
 
-function StepTwo({ form }: { form: FormState }) {
+function StepTwo({
+  form,
+  onNameTaken,
+}: {
+  form: FormState;
+  /** Called when signup rejects the name as taken; the parent returns to Step 1. */
+  onNameTaken: (message: string) => void;
+}) {
   const [country, setCountry] = useState("US");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState("");
@@ -286,9 +477,34 @@ function StepTwo({ form }: { form: FormState }) {
       const data = (await response.json()) as {
         checkoutUrl?: string | null;
         alreadySubscribed?: boolean;
+        businessId?: string | null;
         error?: string;
+        code?: string;
       };
-      if (!response.ok) throw new Error(data.error || "Unable to start your trial.");
+      if (!response.ok) {
+        // A different business claimed the name between the Step-1
+        // pre-check and this checkout — route the message back to the
+        // name field instead of the step-level error.
+        if (data.code === "business_name_taken") {
+          onNameTaken(
+            data.error ||
+              "This business name is already taken. Please choose another."
+          );
+          setSubmitting(false);
+          return;
+        }
+        throw new Error(data.error || "Unable to start your trial.");
+      }
+
+      if (data.businessId) {
+        // Persist the signup before the checkout redirect — CheckoutReturn
+        // sends the owner back with ?forwarding=1 and the wizard resumes at
+        // the final forwarding step from this saved state.
+        window.localStorage.setItem(
+          WIZARD_STORAGE_KEY,
+          JSON.stringify({ businessId: data.businessId, form })
+        );
+      }
 
       if (data.checkoutUrl) {
         window.location.assign(data.checkoutUrl);

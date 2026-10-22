@@ -41,10 +41,19 @@ export interface DograhCallEvent {
   transcriptUrl: string | null;
   transcriptText: string | null;
   customerName: string | null;
+  /** Number the agent promised to call back on, when the workflow captured
+   * one (empty at storage time → falls back to the caller number). */
+  callbackNumber: string | null;
   calendarEventId: string | null;
+  /** Structured job details, when the workflow captured them (all optional). */
+  serviceRequested: string | null;
+  urgency: string | null;
+  preferredCallbackTime: string | null;
 }
 
 const MAX_TRANSCRIPT_CHARS = 20_000;
+/** Cap for free-text job details so one weird payload can't bloat a row. */
+const MAX_DETAIL_CHARS = 200;
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -122,6 +131,16 @@ const OUTCOME_BY_DISPOSITION: Record<string, CallOutcome> = {
 };
 
 const MISSED_DISPOSITIONS = new Set(["disconnected", "no_answer", "rejected", "missed"]);
+
+/** Urgency levels Callflow understands. Values matching one of these (in any
+ * casing) are canonicalized to the lowercase form; anything else is kept
+ * verbatim so the dashboard never invents detail the caller didn't give. */
+const URGENCY_LEVELS = ["emergency", "today", "this_week", "flexible"] as const;
+
+function canonicalUrgency(raw: string): string {
+  const lower = raw.trim().toLowerCase();
+  return (URGENCY_LEVELS as readonly string[]).includes(lower) ? lower : raw;
+}
 
 export function normalizeDisposition(disposition: string): string {
   return disposition.trim().toLowerCase().replace(/[\s-]+/g, "_");
@@ -254,11 +273,42 @@ export function extractDograhEvent(
   const customerName =
     firstString(
       body.customer_name,
+      body.caller_name,
       gathered.customer_name,
       gathered.caller_name,
       gathered.appointment_name,
       gathered.name
     ) || null;
+
+  // MVP job details — every field is optional ("when available"). The Dograh
+  // workflow template decides which variables exist; unmapped ones simply
+  // stay null and the dashboard shows "Not captured" instead of guessing.
+  const serviceRequested =
+    firstString(
+      body.service_requested,
+      body.reason,
+      gathered.service_requested,
+      gathered.service_type,
+      gathered.job_type,
+      gathered.service
+    ).slice(0, MAX_DETAIL_CHARS) || null;
+  const urgency =
+    canonicalUrgency(
+      firstString(
+        body.urgency,
+        gathered.urgency,
+        gathered.urgency_level,
+        gathered.priority
+      ).slice(0, MAX_DETAIL_CHARS)
+    ) || null;
+  const preferredCallbackTime =
+    firstString(
+      body.preferred_callback_time,
+      gathered.preferred_callback_time,
+      gathered.callback_time,
+      gathered.best_time_to_call,
+      gathered.preferred_time
+    ).slice(0, MAX_DETAIL_CHARS) || null;
 
   return {
     deliveryId,
@@ -282,6 +332,7 @@ export function extractDograhEvent(
       typeof body.transcript === "string" ? body.transcript : null
     ),
     customerName,
+    callbackNumber: firstString(body.callback_number, gathered.callback_number) || null,
     calendarEventId:
       firstString(
         body.calendar_event_id,
@@ -289,6 +340,9 @@ export function extractDograhEvent(
         gathered.google_event_id,
         gathered.gcal_event_id
       ) || null,
+    serviceRequested,
+    urgency,
+    preferredCallbackTime,
   };
 }
 
@@ -308,10 +362,11 @@ function secretsMatch(provided: string, expected: string): boolean {
 
 /**
  * Accepted secret placements (all compared against DOGRAH_WEBHOOK_SECRET):
- * 1. `X-Callflow-Secret` custom header (Dograh webhook nodes support custom
+ * 1. `X-Webhook-Secret` header (the webhook contract's primary placement),
+ * 2. `X-Callflow-Secret` custom header (Dograh webhook nodes support custom
  *    headers verbatim),
- * 2. `Authorization: Bearer <secret>` (Dograh credential binding),
- * 3. `?key=<secret>` query param (works with any configuration).
+ * 3. `Authorization: Bearer <secret>` (Dograh credential binding),
+ * 4. `?key=<secret>` query param (works with any configuration).
  * When DOGRAH_WEBHOOK_SECRET is unset this check treats the request as
  * authorized — same open-by-default convention as APP_AUTH_TOKEN, convenient
  * for local dev and the first pilot smoke tests. Production is NOT affected:
@@ -328,6 +383,7 @@ export function isDograhRequestAuthorized(
   const bearer = headers.get("authorization") ?? "";
   const bearerToken = /^bearer\s+(.+)$/i.exec(bearer.trim())?.[1]?.trim() ?? "";
   const provided = firstString(
+    headers.get("x-webhook-secret"),
     headers.get("x-callflow-secret"),
     bearerToken,
     searchParams.get("key")

@@ -6,25 +6,22 @@ import {
   ArrowLeft,
   ArrowRight,
   CheckCircle2,
-  ChevronDown,
-  Copy,
   Loader2,
   MessageSquareText,
   PartyPopper,
   Phone,
   PhoneCall,
-  PhoneForwarded,
-  Settings2,
 } from "lucide-react";
 import { toE164InternationalPhone } from "@/lib/util";
+import CarrierForwardingStep from "./CarrierForwardingStep";
+import { useForwardingDid } from "./useForwardingDid";
 
-const CALLFLOW_NUMBER = "+1 (888) 545-9969";
-const CALLFLOW_TEL = "+18885459969";
+const SETUP_STORAGE_KEY = "callflow_setup_state";
 
 const CARRIERS = [
   { value: "verizon", label: "Verizon" },
-  { value: "att", label: "AT&T" },
   { value: "tmobile", label: "T-Mobile" },
+  { value: "att", label: "AT&T" },
   { value: "other", label: "Other / MVNO" },
 ];
 
@@ -74,10 +71,6 @@ function StepProgress({ step }: { step: number }) {
   );
 }
 
-function normalizePhone(v: string) {
-  return v.replace(/[^\d+]/g, "");
-}
-
 type VerifyState = {
   method: "call" | "sms" | null;
   status: "idle" | "sending" | "sent" | "verified" | "error";
@@ -93,15 +86,24 @@ export default function OnboardingFlow() {
   const [phoneError, setPhoneError] = useState("");
   const [businessId, setBusinessId] = useState<string | null>(null);
   const [starting, setStarting] = useState(false);
+  // Dial-code confirmation — the primary completion path: the owner dials
+  // their carrier's forwarding code and taps the confirm button.
+  const [confirmed, setConfirmed] = useState(false);
   const [billingName, setBillingName] = useState("");
   const [billingEmail, setBillingEmail] = useState("");
   const [billingCountry, setBillingCountry] = useState("");
   const [billingError, setBillingError] = useState("");
+  // Name-taken error from /api/billing/signup — shown under the "Your
+  // name" input rather than the card-level billing error.
+  const [billingNameError, setBillingNameError] = useState("");
   const [confirming, setConfirming] = useState(false);
   const [trial, setTrial] = useState<{ start: string; end: string } | null>(null);
   const [verify, setVerify] = useState<VerifyState>(IDLE_VERIFY);
   const [smsCode, setSmsCode] = useState("");
   const [shakeKey, setShakeKey] = useState(0);
+  // Forwarding DID from the server (/api/setup/config), shown on the success
+  // screen; shared with CarrierForwardingStep via the hook's module cache.
+  const { display: forwardingDidDisplay } = useForwardingDid();
 
   useEffect(() => {
     async function loadBillingConfirmation() {
@@ -124,10 +126,75 @@ export default function OnboardingFlow() {
     void loadBillingConfirmation();
   }, []);
 
+  // Restore a partially-completed setup after a refresh. The user is expected
+  // to leave the browser to configure call forwarding on their phone, so a
+  // reload must not force them to re-enter their number and re-verify.
+  useEffect(() => {
+    try {
+      const raw = window.localStorage.getItem(SETUP_STORAGE_KEY);
+      if (!raw) return;
+      const saved = JSON.parse(raw) as {
+        businessId?: string;
+        step?: number;
+        phone?: string;
+        carrier?: string;
+      };
+      const savedBusinessId = saved.businessId;
+      if (!savedBusinessId || saved.step !== 2) return;
+      void (async () => {
+        try {
+          const me = await fetch("/api/me", { cache: "no-store" });
+          const meData = me.ok
+            ? ((await me.json()) as { hasSubscription?: boolean })
+            : null;
+          if (meData?.hasSubscription) return; // loadBillingConfirmation shows step 3
+          setBusinessId(savedBusinessId);
+          setStep(2);
+          if (saved.phone) setPhone(saved.phone);
+          if (saved.carrier) setCarrier(saved.carrier);
+          const res = await fetch(`/api/onboarding/status/${savedBusinessId}`, {
+            cache: "no-store",
+          });
+          if (!res.ok) return;
+          const data = (await res.json()) as { forwarding_status?: string };
+          if (data.forwarding_status === "active") {
+            setConfirmed(true);
+          }
+        } catch {
+          // ignore — the user can restart from step 1
+        }
+      })();
+    } catch {
+      // ignore corrupt state
+    }
+  }, []);
+
+  // Persist progress so a refresh doesn't lose the business.
+  useEffect(() => {
+    if (step === 3) {
+      try {
+        window.localStorage.removeItem(SETUP_STORAGE_KEY);
+      } catch {
+        // ignore
+      }
+      return;
+    }
+    if (!businessId) return;
+    try {
+      window.localStorage.setItem(
+        SETUP_STORAGE_KEY,
+        JSON.stringify({ businessId, step, phone, carrier })
+      );
+    } catch {
+      // ignore
+    }
+  }, [businessId, step, phone, carrier]);
+
   async function continueToInstructions(e: React.FormEvent) {
     e.preventDefault();
+    let e164: string;
     try {
-      toE164InternationalPhone(phone, billingCountry || "US");
+      e164 = toE164InternationalPhone(phone, billingCountry || "US");
     } catch {
       setPhoneError(
         "Please enter a valid phone number with country code (e.g. +1 555 123 4567)."
@@ -141,7 +208,7 @@ export default function OnboardingFlow() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          phone_number: normalizePhone(phone),
+          phone_number: e164,
           carrier,
         }),
       });
@@ -224,6 +291,7 @@ export default function OnboardingFlow() {
       const data = (await response.json()) as { error?: string };
       if (!response.ok) throw new Error(data.error || "That code didn't work.");
       setVerify({ method: "sms", status: "verified", message: "Number verified!" });
+      setConfirmed(true);
     } catch (error) {
       setVerify({
         method: "sms",
@@ -245,6 +313,7 @@ export default function OnboardingFlow() {
         if (data.forwarding_status === "active") {
           clearInterval(timer);
           setVerify({ method: "call", status: "verified", message: "Number verified!" });
+          setConfirmed(true);
         }
       } catch {
         // keep polling; the answer URL flips the status server-side
@@ -254,13 +323,14 @@ export default function OnboardingFlow() {
 
   async function confirmSetup() {
     setBillingError("");
+    setBillingNameError("");
     setConfirming(true);
     try {
       const response = await fetch("/api/billing/signup", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          phoneNumber: normalizePhone(phone),
+          phoneNumber: toE164InternationalPhone(phone, billingCountry || "US"),
           name: billingName,
           email: billingEmail,
           country: billingCountry,
@@ -270,8 +340,22 @@ export default function OnboardingFlow() {
         checkoutUrl?: string | null;
         alreadySubscribed?: boolean;
         error?: string;
+        code?: string;
       };
-      if (!response.ok) throw new Error(data.error || "Unable to start your subscription.");
+      if (!response.ok) {
+        // A different business already owns this name — route the message
+        // to the "Your name" input so the owner can fix it in place,
+        // instead of the card-level billing error.
+        if (data.code === "business_name_taken") {
+          setBillingNameError(
+            data.error ||
+              "This business name is already taken. Please choose another."
+          );
+          setConfirming(false);
+          return;
+        }
+        throw new Error(data.error || "Unable to start your subscription.");
+      }
 
       if (!data.checkoutUrl) {
         if (data.alreadySubscribed) {
@@ -297,12 +381,14 @@ export default function OnboardingFlow() {
           What&apos;s your business phone number?
         </h1>
         <p className="mt-2 text-sm text-ink-2">
-          This is the number that will forward missed calls to CallFlow.
+          We&apos;ll save this as your Destination Number — the phone CallFlow
+          watches. No calls are forwarded yet; step 2 gives you the dial code
+          that turns on your AI backup.
         </p>
         <form onSubmit={continueToInstructions} className="mt-6 space-y-4">
           <div>
             <label className="mb-1 block text-sm font-medium text-ink-2">
-              Business phone number
+              Your phone number (Destination Number)
             </label>
             <input
               type="tel"
@@ -348,82 +434,45 @@ export default function OnboardingFlow() {
   }
 
   if (step === 2) {
+    // E.164 for the carrier-sync POST inside the forwarding step. Conversion
+    // can fail for odd inputs — null just skips the sync inside the component
+    // rather than blocking setup.
+    let ownerPhoneE164: string | null = null;
+    try {
+      ownerPhoneE164 = toE164InternationalPhone(phone, billingCountry || "US");
+    } catch {
+      ownerPhoneE164 = null;
+    }
     return (
       <div className="mx-auto flex min-h-[70vh] max-w-xl flex-col justify-center px-4 py-10">
         <span className="mb-3 text-sm font-semibold text-wire">Step 2 of 3</span>
         <h1 className="text-2xl font-bold tracking-tight text-ink">
-          Enable call forwarding on your phone
+          Turn on AI after-hours backup
         </h1>
         <p className="mt-2 text-sm text-ink-2">
-          Route calls that reach your number to CallFlow so we can catch the ones
-          you miss.
+          Dial the forwarding code below on the phone you registered — your
+          carrier then forwards the calls you don&apos;t answer to CallFlow and
+          our AI answers for you. It takes under a minute.
         </p>
 
-        <div className="mt-6 rounded-2xl border border-separator bg-white p-5 shadow-sm">
-          <div className="flex items-center gap-3">
-            <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-wire/10 text-wire">
-              <PhoneForwarded className="h-5 w-5" />
-            </div>
-            <div>
-              <p className="text-sm font-semibold text-ink">Forward to CallFlow</p>
-              <p className="text-xs text-ink-3">When unanswered or busy</p>
-            </div>
-          </div>
+        <CarrierForwardingStep
+          businessId={businessId}
+          ownerPhoneE164={ownerPhoneE164}
+          carrier={carrier}
+          onCarrierChange={setCarrier}
+          confirmed={confirmed}
+          onConfirmed={() => setConfirmed(true)}
+        />
 
-          <div className="mt-4 rounded-lg bg-black/[0.03] p-4">
-            <p className="text-xs font-medium uppercase tracking-wide text-ink-3">
-              Forwarding number
-            </p>
-            <div className="mt-1 flex items-center justify-between gap-3">
-              <span className="text-lg font-bold tracking-tight text-ink">
-                {CALLFLOW_NUMBER}
-              </span>
-              <button
-                type="button"
-                onClick={() => navigator.clipboard?.writeText("+18885459969")}
-                className="flex items-center gap-1.5 rounded-md border border-separator bg-white px-2.5 py-1.5 text-xs font-medium text-ink-2 transition-colors hover:bg-black/[0.03]"
-              >
-                <Copy className="h-3.5 w-3.5" />
-                Copy
-              </button>
-            </div>
-          </div>
-
-          <ol className="mt-4 list-inside list-decimal space-y-1.5 text-sm text-ink-2">
-            <li>Open your phone&apos;s Settings</li>
-            <li>
-              Find <b className="text-ink">Call Forwarding</b> (often under “Phone” or
-              “Call”)
-            </li>
-            <li>
-              Forward <b className="text-ink">unanswered</b> and{" "}
-              <b className="text-ink">busy</b> calls to {CALLFLOW_NUMBER}
-            </li>
-          </ol>
-
-          <a
-            href={`tel:${CALLFLOW_TEL}`}
-            className="mt-4 flex items-center justify-center gap-2 rounded-lg border border-separator bg-white px-4 py-2.5 text-sm font-medium text-ink transition-colors hover:bg-black/[0.03]"
-          >
-            <Phone className="h-4 w-4" />
-            Test call — dial {CALLFLOW_NUMBER}
-          </a>
-
-          <div className="mt-4 flex items-start gap-2 rounded-lg bg-wire/10 p-3 text-xs text-wire">
-            <Settings2 className="mt-0.5 h-4 w-4 shrink-0" />
-            <p>
-              If you&apos;re just testing, you can skip forwarding — CallFlow catches
-              calls made to its own number too.
-            </p>
-          </div>
-        </div>
 
         {/* Verification */}
         <div className="mt-6 rounded-2xl border border-separator bg-white p-5 shadow-sm">
-          <p className="text-sm font-semibold text-ink">Verify your number</p>
+          <p className="text-sm font-semibold text-ink">
+            Automatic verification (optional)
+          </p>
           <p className="mt-1 text-xs text-ink-2">
-            Prove you own this number so we can switch forwarding on. Either way
-            works.
+            The button above already switches your AI backup on. These run a
+            server-side proof-of-ownership check instead, if you prefer that.
           </p>
 
           {verify.status === "verified" ? (
@@ -507,6 +556,9 @@ export default function OnboardingFlow() {
             autoComplete="name"
             className={inputClass}
           />
+          {billingNameError && (
+            <p className="text-sm text-danger">{billingNameError}</p>
+          )}
           <input
             type="email"
             value={billingEmail}
@@ -575,7 +627,8 @@ export default function OnboardingFlow() {
         <b className="text-ink">
           {trial ? new Date(trial.end).toLocaleDateString() : "the server-confirmed date"}
         </b>
-        . CallFlow is now watching <b className="text-ink">{CALLFLOW_NUMBER}</b>.
+        . CallFlow is now watching{" "}
+        <b className="text-ink">{forwardingDidDisplay ?? "your CallFlow number"}</b>.
       </p>
       <div className="mt-8 flex w-full flex-col gap-3 sm:flex-row sm:justify-center">
         <Link

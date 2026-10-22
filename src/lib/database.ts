@@ -2,6 +2,8 @@ import Database from "better-sqlite3";
 import fs from "fs";
 import path from "path";
 
+import { generateClientUid } from "./util";
+
 // Path to the SQLite database file. Overridable via DATABASE_PATH so that
 // production deployments can point it at a persistent disk mount. Defaults to
 // ./data/callflow.db for local development.
@@ -76,8 +78,8 @@ export function requiresPersistentDbPath(
 
 /**
  * Returns an actionable error message when the given configuration would put
- * the database on storage that is destroyed by a redeploy, or `null` when it is
- * safe. Only hosts with ephemeral app storage hard-fail; running a production
+ * the database on storage that is destroyed by a redeploy, or `null` when it
+ * is safe. Only hosts with ephemeral app storage hard-fail; running a production
  * build on a machine with a real disk (a laptop test behind a tunnel, a VPS)
  * must keep working with the default `./data/callflow.db`.
  */
@@ -88,54 +90,58 @@ export function dbPathPolicyError(input: DbPathPolicyInput): string | null {
 
   if (!configuredPath) {
     return (
-      "DATABASE_PATH must be set in production. Without it the SQLite file " +
-      `falls back to ${resolvedPath}, which lives on the ephemeral build disk ` +
-      "and is destroyed on every redeploy. Point DATABASE_PATH at the " +
-      "persistent disk mount, e.g. /var/data/callflow.db."
+      "[database] DATABASE_PATH must be set in production: this host's app " +
+      "filesystem is wiped on every deploy, so the default ./data path would " +
+      "silently lose every business, call, and billing record. Point " +
+      "DATABASE_PATH at a persistent mount (e.g. /var/data/callflow.db)."
     );
   }
 
-  if (!path.isAbsolute(configuredPath)) {
+  if (!path.isAbsolute(resolvedPath)) {
     return (
-      `DATABASE_PATH must be an absolute path in production, got ` +
-      `"${configuredPath}". Relative paths resolve against the build directory, ` +
-      "which is wiped on every redeploy."
+      "[database] DATABASE_PATH must be an absolute path in production so the " +
+      "database cannot land inside the app directory that a redeploy wipes " +
+      `(got: ${resolvedPath}).`
     );
   }
 
-  if (isInsideDir(configuredPath, projectDir)) {
+  if (isInsideDir(resolvedPath, projectDir)) {
     return (
-      `DATABASE_PATH ("${configuredPath}") is inside the project directory ` +
-      `(${projectDir}), which is ephemeral in production and is wiped on every ` +
-      "redeploy. Move the database onto the persistent disk mount, e.g. " +
-      "/var/data/callflow.db."
+      "[database] DATABASE_PATH must live outside the app directory in " +
+      "production: this host's app filesystem is ephemeral, so a database at " +
+      `${resolvedPath} would be destroyed on every deploy.`
     );
   }
 
   return null;
 }
 
-/** Throws with {@link dbPathPolicyError}'s message when a deploy would lose data. */
 export function assertPersistentDbPath(dbPath: string): void {
-  const configured = process.env.DATABASE_PATH?.trim();
-  const requirePersistent = requiresPersistentDbPath();
-
   const error = dbPathPolicyError({
-    configuredPath: configured,
+    configuredPath: process.env.DATABASE_PATH?.trim() || undefined,
     resolvedPath: dbPath,
     nodeEnv: process.env.NODE_ENV,
     projectDir: process.cwd(),
-    requirePersistent,
+    requirePersistent: requiresPersistentDbPath(),
   });
-  if (error) throw new Error(`[database] ${error}`);
+  if (error) throw new Error(error);
 
-  if (configured) return;
+  if (process.env.NODE_ENV !== "production") return;
 
-  if (process.env.NODE_ENV === "production") {
-    // Reached only when no ephemeral host was detected, so the safety net is
-    // inactive here. Say so loudly instead of failing silently on a real deploy.
+  if (process.env.DATABASE_PATH?.trim()) {
+    // Explicitly configured in production on an unknown host. The path policy
+    // above already rejected known-bad shapes (relative / inside the app dir);
+    // here we can only trust the operator chose a durable mount.
+    console.log(`[database] using DATABASE_PATH=${dbPath}`);
+    return;
+  }
+
+  if (requiresPersistentDbPath()) {
+    // Unreachable in practice: dbPathPolicyError already hard-failed the
+    // unset-DATABASE_PATH case for ephemeral hosts. Kept as a safety net so a
+    // future policy change can never silently downgrade to the local default.
     console.warn(
-      `[database] NODE_ENV=production without DATABASE_PATH; using ${dbPath}. ` +
+      `[database] production without DATABASE_PATH; using ${dbPath}. ` +
         "No known-ephemeral platform was detected, so the DATABASE_PATH guard is " +
         "off. Set DB_REQUIRE_PERSISTENT_PATH=1 to enforce it on this host."
     );
@@ -162,11 +168,22 @@ const CALL_ADDED_COLUMNS: ReadonlyArray<readonly [string, string]> = [
   ["dograhDisposition", "TEXT"],
   ["outcome", "TEXT"],
   ["customerName", "TEXT"],
+  ["callbackNumber", "TEXT"],
   ["calendarEventId", "TEXT"],
   ["transcriptUrl", "TEXT"],
+  ["serviceRequested", "TEXT"],
+  ["urgency", "TEXT"],
+  ["preferredCallbackTime", "TEXT"],
+  ["followUpStatus", "TEXT NOT NULL DEFAULT 'none'"],
+  ["followUpNotes", "TEXT NOT NULL DEFAULT ''"],
+  ["followUpUpdatedAt", "TEXT"],
 ];
 
+// Same pattern as CALL_ADDED_COLUMNS, for the businesses table. `clientUid`
+// must be ALTERed in before the schema exec because the client-UID unique
+// index in schema.sql references the column.
 const BUSINESS_ADDED_COLUMNS: ReadonlyArray<readonly [string, string]> = [
+  ["clientUid", "TEXT"],
   ["billingName", "TEXT"],
   ["billingEmail", "TEXT"],
   ["billingCountry", "TEXT"],
@@ -178,6 +195,8 @@ const BUSINESS_ADDED_COLUMNS: ReadonlyArray<readonly [string, string]> = [
   ["subscriptionPaymentId", "TEXT"],
   ["smsVerificationCode", "TEXT"],
   ["smsVerificationExpiresAt", "TEXT"],
+  ["notificationEmail", "TEXT"],
+  ["address", "TEXT"],
 ];
 
 function migrateCallsTable(db: Database.Database): void {
@@ -211,6 +230,36 @@ function migrateBusinessesTable(db: Database.Database): void {
   }
 }
 
+/**
+ * Assign permanent client UIDs ("TE-xxxxxxxx") to business rows created before
+ * the column existed. Runs on every cold start, after the schema exec (which
+ * has already created the partial unique index): a NULL clientUid is filled
+ * exactly once, existing values are never rewritten, so a UID a customer was
+ * already given can never change. Uniqueness is checked in-process while
+ * filling; the index is the storage-level backstop.
+ */
+export function backfillBusinessClientUids(db: Database.Database): void {
+  const pending = db
+    .prepare("SELECT id FROM businesses WHERE clientUid IS NULL")
+    .all() as Array<{ id: string }>;
+  if (!pending.length) return;
+
+  const used = new Set(
+    (
+      db
+        .prepare("SELECT clientUid FROM businesses WHERE clientUid IS NOT NULL")
+        .all() as Array<{ clientUid: string }>
+    ).map((row) => row.clientUid)
+  );
+  const update = db.prepare("UPDATE businesses SET clientUid = ? WHERE id = ?");
+  for (const row of pending) {
+    let clientUid = generateClientUid();
+    while (used.has(clientUid)) clientUid = generateClientUid();
+    update.run(clientUid, row.id);
+    used.add(clientUid);
+  }
+}
+
 export function getDb(): Database.Database {
   if (db) return db;
 
@@ -228,7 +277,8 @@ export function getDb(): Database.Database {
   const schema = fs.readFileSync(SCHEMA_PATH, "utf-8");
   instance.exec(schema);
 
+  backfillBusinessClientUids(instance);
+
   db = instance;
   return db;
 }
-

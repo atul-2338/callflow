@@ -158,6 +158,9 @@ describe("isDograhRequestAuthorized", () => {
       expect(
         isDograhRequestAuthorized(headerMap({}), new URLSearchParams("key=s3cret"))
       ).toBe(true);
+      expect(
+        isDograhRequestAuthorized(headerMap({ "x-webhook-secret": "s3cret" }), emptyQuery)
+      ).toBe(true);
     } finally {
       delete process.env.DOGRAH_WEBHOOK_SECRET;
     }
@@ -170,8 +173,113 @@ describe("isDograhRequestAuthorized", () => {
         isDograhRequestAuthorized(headerMap({ "x-callflow-secret": "wrong" }), emptyQuery)
       ).toBe(false);
       expect(isDograhRequestAuthorized(headerMap({}), emptyQuery)).toBe(false);
+      expect(
+        isDograhRequestAuthorized(headerMap({ "x-webhook-secret": "wrong" }), emptyQuery)
+      ).toBe(false);
     } finally {
       delete process.env.DOGRAH_WEBHOOK_SECRET;
     }
+  });
+});
+
+describe("extractDograhEvent — MVP job details", () => {
+  it("captures service, urgency and callback preference from gathered context", () => {
+    const event = extractDograhEvent({
+      caller_number: "+15551112222",
+      workflow_run_id: "details-1",
+      gathered_context: JSON.stringify({
+        call_disposition: "callback_requested",
+        service_requested: "Water heater leak",
+        urgency: "urgent",
+        preferred_callback_time: "after 2pm",
+      }),
+    })!;
+    expect(event.serviceRequested).toBe("Water heater leak");
+    expect(event.urgency).toBe("urgent");
+    expect(event.preferredCallbackTime).toBe("after 2pm");
+  });
+
+  it("accepts the alternate template key names", () => {
+    const event = extractDograhEvent({
+      caller_number: "+15551112222",
+      workflow_run_id: "details-1b",
+      service_requested: "Broken outlet",
+      urgency: "sparks",
+    })!;
+    expect(event.serviceRequested).toBe("Broken outlet");
+    expect(event.urgency).toBe("sparks");
+  });
+
+  it("leaves every detail null when the workflow did not capture it", () => {
+    const event = extractDograhEvent({
+      caller_number: "+15551112222",
+      workflow_run_id: "details-2",
+    })!;
+    expect(event.serviceRequested).toBeNull();
+    expect(event.urgency).toBeNull();
+    expect(event.preferredCallbackTime).toBeNull();
+  });
+
+  it("caps oversized detail values at 200 characters", () => {
+    const event = extractDograhEvent({
+      caller_number: "+15551112222",
+      workflow_run_id: "details-3",
+      service_requested: "x".repeat(500),
+    })!;
+    expect(event.serviceRequested!.length).toBe(200);
+  });
+
+  it("the callback fixture carries the MVP details end-to-end", () => {
+    const { payload } = buildDograhFixture("callback");
+    const event = extractDograhEvent(payload)!;
+    expect(event.serviceRequested).toContain("Water heater");
+    expect(event.urgency).toBeTruthy();
+    expect(event.preferredCallbackTime).toBeTruthy();
+  });
+
+  it("the booked fixture keeps details null (template does not gather them)", () => {
+    const { payload } = buildDograhFixture("booked");
+    const event = extractDograhEvent(payload)!;
+    expect(event.serviceRequested).toBeNull();
+  });
+
+  it("parses the minimal webhook contract keys (call_id / caller_name / reason)", () => {
+    const event = extractDograhEvent({
+      call_id: "731013",
+      workflow_id: "11658",
+      caller_number: "+15551234567",
+      caller_name: "Alex",
+      callback_number: "",
+      reason: "Burst main pipe causing water leakage in kitchen",
+      urgency: "emergency",
+      duration: "78",
+      recording_url: "https://rec.example/731013",
+      transcript_url: "https://tr.example/731013",
+    })!;
+    expect(event).toMatchObject({
+      runId: "731013",
+      customerName: "Alex",
+      callbackNumber: null, // empty string here; fallback happens at storage time
+      serviceRequested: "Burst main pipe causing water leakage in kitchen",
+      urgency: "emergency",
+      durationSeconds: 78,
+      recordingUrl: "https://rec.example/731013",
+      transcriptUrl: "https://tr.example/731013",
+    });
+  });
+
+  it("canonicalizes the four urgency levels in any casing, keeps others verbatim", () => {
+    const upper = extractDograhEvent({
+      caller_number: "+15551112222",
+      workflow_run_id: "urg-1",
+      urgency: "EMERGENCY",
+    })!;
+    expect(upper.urgency).toBe("emergency");
+    const freeText = extractDograhEvent({
+      caller_number: "+15551112222",
+      workflow_run_id: "urg-2",
+      urgency: "Urgent — water spreading",
+    })!;
+    expect(freeText.urgency).toBe("Urgent — water spreading");
   });
 });

@@ -1,37 +1,30 @@
 import type { NextConfig } from "next";
 
-/**
- * Next.js 16 blocks cross-origin requests to dev assets (JS chunks, HMR) by
- * default. When testing through an ngrok tunnel the browser origin is the
- * ngrok domain, so it must be allow-listed or the app renders without
- * JavaScript (e.g. the checkout return page never finishes polling).
- *
- * Derived from DODO_PAYMENTS_RETURN_URL — which is already kept in sync with
- * the current tunnel — so a tunnel restart that changes the URL doesn't break
- * the app again.
- */
-function allowedDevOrigins(): string[] {
-  const returnUrl = process.env.DODO_PAYMENTS_RETURN_URL?.trim();
-  if (!returnUrl) return [];
-  try {
-    return [new URL(returnUrl).hostname];
-  } catch {
-    return [];
-  }
-}
-
-const nextConfig: NextConfig = {
-  // Pin Turbopack's watch/resolve root to this repo. Without it, Next sees a
-  // stray F:\pnpm-lock.yaml above the project, infers root = F:\, and scans
-  // the entire drive on startup (Watchpack EINVAL on pagefile.sys etc.), which
-  // makes `next dev` crawl or hang. See worklog-2026-09-12 §3.1.
-  turbopack: {
-    root: __dirname,
-  },
-  // better-sqlite3 is a native module — keep it external so it is required at
-  // runtime instead of being bundled/transpiled by the Next.js build.
-  serverExternalPackages: ["better-sqlite3"],
-  allowedDevOrigins: allowedDevOrigins(),
+// `watchOptions.ignored` is applied by the dev bundler but is not part of the
+// published NextConfig type (which only declares `pollIntervalMs`), so the
+// local type is widened for the Windows-only block below. This keeps
+// `next build` type-checking clean on Linux, where the block is never set.
+type NextConfigWithWatchIgnore = NextConfig & {
+  watchOptions?: { pollIntervalMs?: number; ignored?: string[] };
 };
+
+const nextConfig: NextConfigWithWatchIgnore = {};
+
+if (process.platform === "win32") {
+  // Windows-only dev workaround: Watchpack's initial scan of the F:\ drive
+  // root hits locked system files (pagefile.sys, System Volume Information,
+  // ...) and logs EINVAL warnings on every `next dev` start. They are
+  // non-fatal, and these paths are meaningless on Linux (the Vultr VPS), so
+  // the ignore list is applied only on Windows; the Linux config stays `{}`.
+  nextConfig.watchOptions = {
+    ignored: [
+      "F:\\pagefile.sys",
+      "F:\\DumpStack.log.tmp",
+      "F:\\System Volume Information",
+      "F:\\WindowsApps",
+      "F:\\New",
+    ],
+  };
+}
 
 export default nextConfig;

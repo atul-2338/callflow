@@ -24,6 +24,9 @@ export async function GET(request: Request) {
   const access = describeBillingAccess(business);
   return NextResponse.json({
     businessId: business.id,
+    // Owner-facing display name (businesses.billingName) for the dashboard
+    // header. Null when the business has no name on record.
+    name: business.billingName?.trim() || null,
     subscriptionStatus: business.subscriptionStatus,
     trialStartedAt: business.trialStartedAt,
     trialEndsAt: business.trialStartedAt ? trialEndsAt(business.trialStartedAt) : null,

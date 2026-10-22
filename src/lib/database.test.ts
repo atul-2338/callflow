@@ -1,7 +1,9 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import path from "path";
+import Database from "better-sqlite3";
 import {
   assertPersistentDbPath,
+  backfillBusinessClientUids,
   dbPathPolicyError,
   getDbPath,
   requiresPersistentDbPath,
@@ -162,7 +164,7 @@ describe("assertPersistentDbPath", () => {
     vi.stubEnv("NODE_ENV", "development");
     delete process.env.DATABASE_PATH;
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
-    expect(() => assertPersistentDbPath(getDbPath())).not.toThrow();
+    assertPersistentDbPath(getDbPath());
     expect(warn).toHaveBeenCalledWith(expect.stringContaining("DATABASE_PATH is not set"));
   });
 
@@ -172,5 +174,51 @@ describe("assertPersistentDbPath", () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     assertPersistentDbPath(getDbPath());
     expect(warn).not.toHaveBeenCalled();
+  });
+});
+
+describe("backfillBusinessClientUids", () => {
+  function setup(): Database.Database {
+    const db = new Database(":memory:");
+    db.exec("CREATE TABLE businesses (id TEXT PRIMARY KEY, clientUid TEXT)");
+    return db;
+  }
+
+  it("fills NULL clientUid rows with unique, well-formed UIDs", () => {
+    const db = setup();
+    const insert = db.prepare(
+      "INSERT INTO businesses (id, clientUid) VALUES (?, ?)"
+    );
+    insert.run("biz-1", null);
+    insert.run("biz-2", null);
+    insert.run("biz-3", "TE-deadbeef");
+
+    backfillBusinessClientUids(db);
+
+    const rows = db
+      .prepare("SELECT id, clientUid FROM businesses ORDER BY id")
+      .all() as Array<{ id: string; clientUid: string | null }>;
+    expect(rows[0].clientUid).toMatch(/^TE-[0-9a-f]{8}$/);
+    expect(rows[1].clientUid).toMatch(/^TE-[0-9a-f]{8}$/);
+    expect(rows[0].clientUid).not.toBe(rows[1].clientUid);
+    // A pre-existing UID is never rotated by the backfill.
+    expect(rows[2].clientUid).toBe("TE-deadbeef");
+    db.close();
+  });
+
+  it("is a no-op when every row already has a UID", () => {
+    const db = setup();
+    db.prepare("INSERT INTO businesses (id, clientUid) VALUES (?, ?)").run(
+      "biz-1",
+      "TE-cafebabe"
+    );
+
+    backfillBusinessClientUids(db);
+
+    const row = db
+      .prepare("SELECT clientUid FROM businesses WHERE id = 'biz-1'")
+      .get() as { clientUid: string };
+    expect(row.clientUid).toBe("TE-cafebabe");
+    db.close();
   });
 });

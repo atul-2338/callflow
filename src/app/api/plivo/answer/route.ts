@@ -56,10 +56,17 @@ export async function POST(request: Request) {
 
 /** Plivo may also GET the answer URL depending on the answer_method used. */
 export async function GET(request: Request) {
+  // A GET carries no verifiable signature, so it must never flip forwarding
+  // status — previously anyone who guessed a businessId could mark it
+  // verified. placeVerificationCall() always uses answer_method POST, which
+  // is the signature-checked path above; this handler just answers politely.
   const businessId = new URL(request.url).searchParams.get("businessId");
-  const business = businessId ? await getBusinessById(businessId) : undefined;
-  if (business) {
-    await setBusinessForwardingStatus(business.id, "active", new Date().toISOString());
+  if (businessId) {
+    console.warn(
+      "[plivo-answer] unsigned GET ignored — verification only happens via the signed POST"
+    );
   }
-  return lamlResponse("<Hangup/>");
+  return lamlResponse(
+    "<Say>This verification link is reached by the verification call. Goodbye.</Say><Hangup/>"
+  );
 }

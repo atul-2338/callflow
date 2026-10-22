@@ -1,3 +1,4 @@
+import { randomBytes } from "crypto";
 import {
   isValidPhoneNumber,
   parsePhoneNumber,
@@ -76,4 +77,21 @@ export function toE164InternationalPhone(
   throw new Error(
     "Business phone number must be a valid international number with country code (e.g. +1 555 123 4567)."
   );
+}
+
+/**
+ * A business's permanent public identifier: "TE-" + 8 lowercase hex chars
+ * (e.g. "TE-9a8b7c6d"). The TE- prefix marks businesses enrolled through the
+ * trial onboarding flow — every business gets one, and the value is assigned
+ * exactly once at creation and never rotated afterwards.
+ *
+ * 8 hex chars = 4 bytes of uniform randomness from crypto.randomBytes, which
+ * gives exactly 8 hex characters without slicing a UUID string (a UUID's
+ * version/variant bits are not uniformly random). Callers must treat the
+ * returned value as opaque and check uniqueness against the businesses table
+ * (see createBusiness and backfillBusinessClientUids); the partial unique
+ * index idx_businesses_client_uid is the storage-level backstop.
+ */
+export function generateClientUid(): string {
+  return `TE-${randomBytes(4).toString("hex")}`;
 }

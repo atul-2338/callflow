@@ -1,16 +1,25 @@
 import { NextResponse } from "next/server";
 import { createContact, deleteContact, getContacts, updateContact } from "@/lib/db";
-import { isAuthorized, unauthorizedResponse } from "@/lib/auth";
+import { businessIdFromCookieHeader } from "@/lib/business-session";
 import { isValidPhone } from "@/lib/util";
 import { CONTACT_STATUSES } from "@/lib/types";
 
-export async function GET() {
+export async function GET(request: Request) {
+  const businessId = businessIdFromCookieHeader(request.headers.get("cookie"));
+  if (!businessId) {
+    return NextResponse.json({ error: "unauthorized" }, { status: 401 });
+  }
+
   const contacts = await getContacts();
   return NextResponse.json(contacts);
 }
 
 export async function POST(request: Request) {
-  if (!isAuthorized(request)) return unauthorizedResponse();
+  const businessId = businessIdFromCookieHeader(request.headers.get("cookie"));
+  if (!businessId) {
+    return NextResponse.json({ error: "unauthorized" }, { status: 401 });
+  }
+
   try {
     const body = await request.json();
     const { name, phone, email, status, notes } = body;
@@ -46,7 +55,11 @@ export async function POST(request: Request) {
 }
 
 export async function PUT(request: Request) {
-  if (!isAuthorized(request)) return unauthorizedResponse();
+  const businessId = businessIdFromCookieHeader(request.headers.get("cookie"));
+  if (!businessId) {
+    return NextResponse.json({ error: "unauthorized" }, { status: 401 });
+  }
+
   try {
     const body = await request.json();
     const { id, name, phone, email, status, notes } = body;
@@ -84,7 +97,11 @@ export async function PUT(request: Request) {
 }
 
 export async function DELETE(request: Request) {
-  if (!isAuthorized(request)) return unauthorizedResponse();
+  const businessId = businessIdFromCookieHeader(request.headers.get("cookie"));
+  if (!businessId) {
+    return NextResponse.json({ error: "unauthorized" }, { status: 401 });
+  }
+
   try {
     const { searchParams } = new URL(request.url);
     const id = searchParams.get("id");

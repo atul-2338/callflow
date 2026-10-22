@@ -2,14 +2,19 @@ import Link from "next/link";
 import { SiteFooter } from "@/components/marketing/SiteChrome";
 import WaitlistForm from "@/components/marketing/WaitlistForm";
 import {
+  DEMO_AUDIO_SRC,
+  DEMO_PHONE_DISPLAY,
+  DEMO_PHONE_TEL,
+} from "@/lib/siteConfig";
+import {
   ArrowRight,
   Bell,
   Bot,
   CalendarCheck,
   CheckCircle2,
+  ChevronDown,
   Phone,
   PhoneForwarded,
-  Star,
 } from "lucide-react";
 
 const steps = [
@@ -34,47 +39,9 @@ const steps = [
 ];
 
 const stats = [
-  { value: "62%", tone: "text-callback", label: "of local business calls go unanswered" },
-  { value: "~40%", tone: "text-danger", label: "of callers never try again after a missed call" },
+  { value: "24/7", tone: "text-callback", label: "AI answering, nights and weekends" },
+  { value: "$49", tone: "text-gold", label: "flat per month, no per-minute fees" },
   { value: "2 min", tone: "text-booked", label: "to set CallFlow up for your business" },
-];
-
-const reviews = [
-  {
-    quote:
-      "I was losing customers every time I stepped away from the desk. CallFlow caught a leak job, booked it, and I confirmed in minutes.",
-    name: "Marcus Reeves",
-    business: "Reeves Plumbing, Austin TX",
-    stars: 5,
-  },
-  {
-    quote:
-      "My salon is one person. While I'm in a chair with a client, CallFlow answers and books the appointment for me.",
-    name: "Dana Whitfield",
-    business: "Whitfield Beauty Bar, Denver CO",
-    stars: 5,
-  },
-  {
-    quote:
-      "The transcripts are spot-on. I read them on my phone between calls and decide who to call back first.",
-    name: "Priya Sharma",
-    business: "Sharma Dental, Seattle WA",
-    stars: 5,
-  },
-  {
-    quote:
-      "We got a call-back rate of almost 100% since switching. It honestly pays for itself after one saved job.",
-    name: "Tom Okafor",
-    business: "OK Home Services, Phoenix AZ",
-    stars: 4,
-  },
-  {
-    quote:
-      "Setup took one coffee break. Forwarding, done. Missed calls stopped slipping through the same week.",
-    name: "Luis Herrera",
-    business: "Herrera HVAC, Miami FL",
-    stars: 5,
-  },
 ];
 
 const trustBadges = [
@@ -98,12 +65,14 @@ export default function Landing() {
     <main>
       <Header />
       <Hero />
+      <HearIt />
       <Stats />
       <HowItWorks />
       <Pricing />
-      <Reviews />
+      <FoundingCustomer />
       <TrustStrip />
       <Waitlist />
+      <Faq />
 
       <FinalCta />
       <SiteFooter />
@@ -129,6 +98,9 @@ function Header() {
           </a>
           <a href="#pricing" className="hidden hover:text-white sm:inline">
             Pricing
+          </a>
+          <a href="#faq" className="hidden hover:text-white sm:inline">
+            Questions
           </a>
           <Link href="/onboarding" className="ios-pill-primary px-4 py-2 text-sm">
             Get started
@@ -219,6 +191,47 @@ function Hero() {
           </li>
         </ul>
       </div>
+      <p className="mt-3 text-xs text-white/70">Example</p>
+    </section>
+  );
+}
+
+function HearIt() {
+  const hasPhone = DEMO_PHONE_DISPLAY !== "" && DEMO_PHONE_TEL !== "";
+  const hasAudio = DEMO_AUDIO_SRC !== "";
+  if (!hasPhone && !hasAudio) return null;
+
+  return (
+    <section className="mx-auto w-full max-w-3xl px-4 pb-16 text-center sm:px-6">
+      <h2 className="text-3xl font-bold tracking-tight text-foreground sm:text-4xl">
+        Hear it for yourself
+      </h2>
+      <p className="mx-auto mt-3 max-w-xl text-base leading-relaxed text-white/70">
+        Call our demo line and talk to the CallFlow AI receptionist like a
+        customer would.
+      </p>
+      {hasPhone && (
+        <a
+          href={`tel:${DEMO_PHONE_TEL}`}
+          className="ios-pill-primary mt-8 px-6 py-3 text-[15px]"
+        >
+          Call the demo: {DEMO_PHONE_DISPLAY}
+          <Phone className="h-4 w-4" />
+        </a>
+      )}
+      {hasAudio && (
+        <div className="mt-8">
+          <audio
+            controls
+            preload="none"
+            src={DEMO_AUDIO_SRC}
+            className="mx-auto w-full max-w-md"
+          />
+          <p className="mt-2 text-xs text-white/70">
+            Listen to a sample call (about 30 seconds)
+          </p>
+        </div>
+      )}
     </section>
   );
 }
@@ -322,61 +335,28 @@ function Pricing() {
   );
 }
 
-function Stars({ count }: { count: number }) {
-  return (
-    <div className="flex gap-0.5">
-      {Array.from({ length: 5 }).map((_, i) => (
-        <Star
-          key={i}
-          className={`h-4 w-4 ${
-            i < count ? "fill-callback text-callback" : "fill-black/10 text-black/10"
-          }`}
-        />
-      ))}
-    </div>
-  );
-}
-
-function Reviews() {
+function FoundingCustomer() {
   return (
     <section className="mx-auto w-full max-w-6xl px-4 pb-20 sm:px-6">
       <h2 className="text-center text-3xl font-bold tracking-tight text-foreground sm:text-4xl">
-        Trusted by local businesses
+        Be one of our first 10 businesses
       </h2>
       <p className="mx-auto mt-3 max-w-xl text-center text-base text-white/70">
-        Plumbers, salons, clinics, and contractors across the US never miss a
-        lead.
+        We&apos;re onboarding our first 10 local businesses. Founding customers
+        keep the $49/month price for as long as they stay subscribed, and get
+        direct access to the founder for setup and feedback.
       </p>
-      <div className="mt-12 grid gap-5 md:grid-cols-2 lg:grid-cols-3">
-        {reviews.map((r) => (
-          <figure key={r.name} className="ios-card p-6">
-            <Stars count={r.stars} />
-            <blockquote className="mt-4 text-sm leading-relaxed text-ink-2">
-              “{r.quote}”
-            </blockquote>
-            <figcaption className="mt-5 flex items-center gap-3">
-              <div className="flex h-9 w-9 items-center justify-center rounded-full bg-wire/10 text-sm font-semibold text-wire">
-                {r.name.charAt(0)}
-              </div>
-              <div>
-                <p className="text-sm font-semibold text-ink">{r.name}</p>
-                <p className="text-xs text-ink-3">{r.business}</p>
-              </div>
-            </figcaption>
-          </figure>
-        ))}
-        <div className="flex flex-col items-center justify-center rounded-2xl border-2 border-dashed border-white/25 bg-white/5 p-6 text-center">
-          <p className="text-sm font-medium text-white/70">
-            Your business could be here
-          </p>
-          <Link
-            href="/onboarding"
-            className="ios-pill-primary mt-3 px-4 py-2 text-sm"
-          >
-            Get started
-            <ArrowRight className="h-4 w-4" />
-          </Link>
-        </div>
+      <p className="mx-auto mt-2 max-w-xl text-center text-sm text-white/70">
+        Built for plumbers, salons, clinics, and contractors.
+      </p>
+      <div className="mt-8 flex justify-center">
+        <Link
+          href="/onboarding"
+          className="ios-pill-primary px-6 py-3 text-[15px]"
+        >
+          Claim a founding spot
+          <ArrowRight className="h-4 w-4" />
+        </Link>
       </div>
     </section>
   );
@@ -412,6 +392,54 @@ function Waitlist() {
           waitlist and we&apos;ll email you the moment your slot opens.
         </p>
         <WaitlistForm />
+      </div>
+    </section>
+  );
+}
+
+const faqs = [
+  {
+    q: "Does it work with my carrier?",
+    a: "CallFlow works with US carriers that support forwarding unanswered calls, including Verizon, AT&T, and T-Mobile. During setup we generate the exact forwarding code for your carrier.",
+  },
+  {
+    q: "Do I have to change my business number?",
+    a: "No. Customers keep calling your existing number. CallFlow only receives the calls you don't answer.",
+  },
+  {
+    q: "What if the AI can't answer a question?",
+    a: "It takes a detailed message with the caller's name, number, and reason for calling, then sends a push notification to your phone with the transcript attached.",
+  },
+  {
+    q: "Can I turn it off?",
+    a: "Yes. Call forwarding is set on your own carrier, so you can switch it off any time using your carrier's forwarding-cancel code. You can also cancel your CallFlow plan at any time.",
+  },
+  {
+    q: "Are calls recorded?",
+    a: "Calls are transcribed and saved to your account so you can review them. Recording and notification rules vary by state, so please review our Terms of Service and Privacy Policy.",
+  },
+  {
+    q: "How does the free trial work?",
+    a: "You pay $0 today. Cancel any time before day 3 and you are never charged. After that, $49 per month, cancel any time.",
+  },
+];
+
+function Faq() {
+  return (
+    <section id="faq" className="mx-auto w-full max-w-3xl px-4 py-20 sm:px-6">
+      <h2 className="text-center text-3xl font-bold tracking-tight text-foreground sm:text-4xl">
+        Common questions
+      </h2>
+      <div className="ios-card mt-10 divide-y divide-separator overflow-hidden">
+        {faqs.map((f) => (
+          <details key={f.q} className="group px-6 py-5">
+            <summary className="flex cursor-pointer list-none items-center justify-between gap-4 text-sm font-semibold text-ink [&::-webkit-details-marker]:hidden">
+              {f.q}
+              <ChevronDown className="h-4 w-4 shrink-0 text-ink-3 transition-transform group-open:rotate-180" />
+            </summary>
+            <p className="mt-3 text-sm leading-relaxed text-ink-2">{f.a}</p>
+          </details>
+        ))}
       </div>
     </section>
   );

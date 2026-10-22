@@ -1,3 +1,4 @@
+import { randomInt } from "crypto";
 import { getPlivoConfig, isPlivoConfigured } from "./plivo";
 
 /**
@@ -69,7 +70,12 @@ export async function sendSms(to: string, text: string): Promise<SmsResult> {
   }
 }
 
-/** Generate a 6-digit numeric verification code (leading zeros allowed). */
+/**
+ * Generate a 6-digit numeric verification code (leading zeros allowed).
+ * Uses the OS CSPRNG (`crypto.randomInt`), NOT Math.random() — this code is
+ * the only thing standing between an attacker and activating forwarding on a
+ * business they don't own, so it must be unpredictable.
+ */
 export function generateVerificationCode(): string {
-  return String(Math.floor(Math.random() * 1_000_000)).padStart(6, "0");
+  return String(randomInt(0, 1_000_000)).padStart(6, "0");
 }

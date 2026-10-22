@@ -6,6 +6,7 @@ import {
 } from "@/lib/db";
 import { getPlivoConfig, getPublicBaseUrl, isPlivoConfigured } from "@/lib/plivo";
 import { placeVerificationCall } from "@/lib/plivo";
+import { clientIp, rateLimit } from "@/lib/rate-limit";
 import { applyCors, corsPreflightResponse, handlePreflight } from "@/lib/cors";
 
 export async function OPTIONS(request: Request) {
@@ -36,6 +37,21 @@ export async function POST(request: Request) {
     if (!business) {
       return applyCors(
         NextResponse.json({ error: "Business not found" }, { status: 404 }),
+        request
+      );
+    }
+
+    // Paid Plivo call — cap per business and per client IP so this endpoint
+    // can't be turned into a free-calls relay.
+    const businessLimit = rateLimit(`verify-call:${business.id}`, 3, 15 * 60 * 1000);
+    const ipLimit = rateLimit(`verify-call:ip:${clientIp(request)}`, 10, 15 * 60 * 1000);
+    const limit = businessLimit.allowed ? ipLimit : businessLimit;
+    if (!limit.allowed) {
+      return applyCors(
+        NextResponse.json(
+          { error: "Too many verification calls. Try again in a few minutes." },
+          { status: 429, headers: { "Retry-After": String(limit.retryAfterSeconds) } }
+        ),
         request
       );
     }
