@@ -34,16 +34,35 @@ function warnIfSecretUnconfigured() {
 }
 
 export async function POST(request: Request) {
+  console.log("🚨 [DOGRAH WEBHOOK HIT] Received request at:", new Date().toISOString());
   warnIfSecretUnconfigured();
   let body: unknown;
   try {
     body = await request.json();
   } catch {
+    console.warn("🚨 [DOGRAH PAYLOAD]: request body was not valid JSON — rejecting with 400");
     return NextResponse.json(
       { error: "request body must be valid JSON" },
       { status: 400 }
     );
   }
+  // Parsed above, so this must sit after the parse — body doesn't exist before it.
+  console.log("🚨 [DOGRAH PAYLOAD]:", JSON.stringify(body, null, 2));
+
+  // Debug visibility for the auth gate (isDograhRequestAuthorized): log WHICH
+  // secret placements Dograh actually sent — never the values themselves.
+  console.log(
+    "🚨 [DOGRAH AUTH] server secret configured:",
+    Boolean(dograhWebhookSecret()),
+    "| placements seen → x-webhook-secret:",
+    Boolean(request.headers.get("x-webhook-secret")),
+    "| x-callflow-secret:",
+    Boolean(request.headers.get("x-callflow-secret")),
+    "| authorization:",
+    Boolean(request.headers.get("authorization")),
+    "| ?key param:",
+    new URL(request.url).searchParams.has("key")
+  );
 
   try {
     const result = await handleDograhWebhook({
@@ -51,9 +70,12 @@ export async function POST(request: Request) {
       headers: request.headers,
       searchParams: new URL(request.url).searchParams,
     });
+    // Surface every handler verdict (200 stored/duplicate, 400 bad payload,
+    // 401 unauthorized, 503 secret unset) in pm2 logs instead of silence.
+    console.log("🚨 [DOGRAH RESULT]: status", result.status, JSON.stringify(result.body));
     return NextResponse.json(result.body, { status: result.status });
-  } catch (err) {
-    console.error("[dograh-webhook] unhandled failure:", err);
+  } catch (error) {
+    console.error("Webhook Error:", error);
     return NextResponse.json(
       { error: "internal error processing webhook" },
       { status: 500 }
