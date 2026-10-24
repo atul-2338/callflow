@@ -1,59 +1,40 @@
 import { createHash, timingSafeEqual } from "crypto";
-import type { CallOutcome, CallStatus } from "./types";
 import { normalizeEnvValue } from "./util";
 
 /**
- * Parsing for the payload of Dograh's workflow "send webhook" node.
+ * Shared-secret gate + payload parsing for Dograh's workflow "send webhook"
+ * node (POST /api/webhooks/dograh).
  *
- * Contract (verified against Dograh source, services/workflow + tasks):
- * - The body is a user-authored JSON template. The renderer stringifies EVERY
- *   value, so nested dicts (initial_context, gathered_context, cost_info)
- *   arrive as JSON-encoded STRINGS, and numbers arrive as strings.
- * - The platform injects `call_disposition` into gathered_context itself.
- * - Telephony runs store caller_number / called_number / direction in
- *   initial_context; dispositions live in gathered_context
- *   (`call_disposition` raw, `mapped_call_disposition` normalized).
- * - recording_url / transcript_url are public `/public/download/workflow/...`
- *   links that 302-redirect to short-lived signed storage URLs.
- * - Retries (up to 5) come with headers: X-Dograh-Delivery-Id,
- *   X-Dograh-Workflow-Run-Id, X-Dograh-Delivery-Attempt.
- *
- * Everything below therefore accepts keys at the top level OR inside nested
- * (possibly stringified) context dicts.
+ * Contract:
+ * - The secret lives in the WEBHOOK_SECRET environment variable and must be
+ *   presented in the `x-webhook-secret` request header. The header NAME is
+ *   matched case-insensitively (see readHeaderSafe) so portal/proxy header
+ *   casing rewrites can never cause a false 401. A wrong or missing secret —
+ *   on either side — fails closed with 401.
+ * - The body is a user-authored JSON template. Dograh's renderer stringifies
+ *   EVERY value, so nested dicts (gathered.context, initial_context) can
+ *   arrive as JSON-encoded strings and numbers as strings; the parser below
+ *   accepts both shapes. Required: callId. Optional: status, duration,
+ *   gathered.context.customer_name, caller_number / called_number (used to
+ *   link the call to its business). Everything else is ignored.
  */
 
 export type HeaderReader = { get(name: string): string | null };
 
-export interface DograhCallEvent {
-  deliveryId: string | null;
-  runId: string | null;
-  workflowName: string | null;
-  direction: string;
-  callerNumber: string;
-  calledNumber: string;
-  disposition: string;
-  outcome: CallOutcome;
-  callStatus: CallStatus;
-  startedAt: string;
-  endedAt: string | null;
-  durationSeconds: number | null;
-  recordingUrl: string | null;
-  transcriptUrl: string | null;
-  transcriptText: string | null;
-  customerName: string | null;
-  /** Number the agent promised to call back on, when the workflow captured
-   * one (empty at storage time → falls back to the caller number). */
-  callbackNumber: string | null;
-  calendarEventId: string | null;
-  /** Structured job details, when the workflow captured them (all optional). */
-  serviceRequested: string | null;
-  urgency: string | null;
-  preferredCallbackTime: string | null;
+/** Server-side shared secret for /api/webhooks/dograh (WEBHOOK_SECRET env). */
+export function webhookSecret(): string {
+  return normalizeEnvValue(process.env.WEBHOOK_SECRET);
 }
 
-const MAX_TRANSCRIPT_CHARS = 20_000;
-/** Cap for free-text job details so one weird payload can't bloat a row. */
-const MAX_DETAIL_CHARS = 200;
+function sha256(value: string): Buffer {
+  return createHash("sha256").update(value, "utf8").digest();
+}
+
+/** Constant-time comparison — sha256 first so differing lengths can never
+ * leak through timingSafeEqual (which throws on length mismatch). */
+export function secretsMatch(provided: string, expected: string): boolean {
+  return timingSafeEqual(sha256(provided), sha256(expected));
+}
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -89,307 +70,105 @@ function firstFiniteNumber(...values: unknown[]): number | null {
   for (const value of values) {
     const n =
       typeof value === "number" ? value : typeof value === "string" ? Number(value) : NaN;
-    if (Number.isFinite(n) && n >= 0) return n;
+    if (Number.isFinite(n)) return n;
   }
   return null;
 }
 
-/** Dograh writes datetimes as Python `isoformat()` output, sometimes without
- * a timezone suffix. JS `Date.parse` would read naive stamps as *local* time,
- * so detect them first and force UTC. */
-function parseTimestamp(...values: unknown[]): number | null {
-  const raw = firstString(...values);
-  if (!raw) return null;
-  const normalized = raw.replace(" ", "T");
-  if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2}(\.\d+)?)?$/.test(normalized)) {
-    const utc = Date.parse(`${normalized}Z`);
-    if (!Number.isNaN(utc)) return utc;
-  }
-  const stamp = Date.parse(raw);
-  return Number.isNaN(stamp) ? null : stamp;
-}
-
-
-const OUTCOME_BY_DISPOSITION: Record<string, CallOutcome> = {
-  appointment_booked: "booked",
-  booked: "booked",
-  api_booked: "booked",
-  booking_confirmed: "booked",
-  callback_requested: "callback",
-  callback: "callback",
-  request_callback: "callback",
-  voicemail_detected: "voicemail",
-  voicemail_left: "voicemail",
-  voicemail: "voicemail",
-  answered: "handled",
-  handled: "handled",
-  resolved: "handled",
-  information_provided: "handled",
-  question_answered: "handled",
-  transferred: "handled",
-  transfer: "handled",
-};
-
-const MISSED_DISPOSITIONS = new Set(["disconnected", "no_answer", "rejected", "missed"]);
-
-/** Urgency levels Callflow understands. Values matching one of these (in any
- * casing) are canonicalized to the lowercase form; anything else is kept
- * verbatim so the dashboard never invents detail the caller didn't give. */
-const URGENCY_LEVELS = ["emergency", "today", "this_week", "flexible"] as const;
-
-function canonicalUrgency(raw: string): string {
-  const lower = raw.trim().toLowerCase();
-  return (URGENCY_LEVELS as readonly string[]).includes(lower) ? lower : raw;
-}
-
-export function normalizeDisposition(disposition: string): string {
-  return disposition.trim().toLowerCase().replace(/[\s-]+/g, "_");
-}
-
-export function mapDispositionToOutcome(disposition: string): CallOutcome {
-  return OUTCOME_BY_DISPOSITION[normalizeDisposition(disposition)] ?? "other";
-}
-
-function deriveCallStatus(
-  outcome: CallOutcome,
-  disposition: string,
-  durationSeconds: number | null
-): CallStatus {
-  if (outcome === "voicemail") return "voicemail_left";
-  const key = normalizeDisposition(disposition);
-  if (outcome === "other" && MISSED_DISPOSITIONS.has(key)) {
-    return !durationSeconds ? "missed" : "answered";
-  }
-  return "answered";
+/** "x-webhook-secret" → "X-Webhook-Secret" (canonical HTTP title-casing). */
+function toTitleCaseHeader(name: string): string {
+  return name.replace(/(^|-)([a-z0-9])/g, (_match, separator: string, char: string) =>
+    separator + char.toUpperCase()
+  );
 }
 
 /**
- * Flatten a Dograh transcript (JSON array of turns or plain text) into
- * "Caller: …" / "Agent: …" lines. Unparseable input is kept as-is.
+ * Read a header value no matter how its NAME was cased on the wire.
+ *
+ * The web-standard `Headers` class is already case-insensitive — it lowercases
+ * names internally, and proxies that rewrite casing in transit only ever make
+ * names lowercase, so Fetch-based traffic always matches a lowercase lookup.
+ * But `HeaderReader` is a structural contract: raw Node header records, test
+ * mocks and some framework header bags implement `get()` with exact-match
+ * (case-sensitive) semantics, where a title-case "X-Webhook-Secret" would miss
+ * a lowercase key and vice versa — exactly the silent-401 class of failure.
+ *
+ * For each requested name, try every distinct spelling (exact, lowercase,
+ * canonical title-case), swallowing per-lookup errors (a throwing get() must
+ * never 500 the webhook), trimming whitespace, and collapsing the comma-joined
+ * value Fetch produces for duplicated headers down to its first segment.
  */
-export function flattenTranscript(raw: string | null): string | null {
-  if (!raw) return null;
-  const text = raw.trim();
-  if (!text) return null;
-  if (text[0] !== "[" && text[0] !== "{") {
-    return text.slice(0, MAX_TRANSCRIPT_CHARS);
-  }
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(text);
-  } catch {
-    return text.slice(0, MAX_TRANSCRIPT_CHARS);
-  }
-  const lines = collectTurns(parsed);
-  return (lines.length ? lines.join("\n") : text).slice(0, MAX_TRANSCRIPT_CHARS);
-}
-
-function turnLabel(speaker: string): string {
-  const key = speaker.trim().toLowerCase();
-  if (["user", "caller", "customer", "human"].includes(key)) return "Caller";
-  if (["agent", "bot", "assistant", "ai"].includes(key)) return "Agent";
-  return speaker || "Caller";
-}
-
-function collectTurns(value: unknown): string[] {
-  if (Array.isArray(value)) {
-    return value.flatMap(collectTurns);
-  }
-  if (isPlainObject(value)) {
-    const text = firstString(value.text, value.content, value.message, value.transcript);
-    if (text) {
-      const speaker = firstString(value.speaker, value.role, value.channel, value.from);
-      return [`${turnLabel(speaker || "Caller")}: ${text}`];
-    }
-    for (const key of ["transcript", "turns", "messages"]) {
-      const nested = value[key];
-      if (Array.isArray(nested)) return collectTurns(nested);
+export function readHeaderSafe(headers: HeaderReader, ...names: string[]): string {
+  for (const name of names) {
+    const spellings = new Set<string>([
+      name,
+      name.toLowerCase(),
+      toTitleCaseHeader(name.toLowerCase()),
+    ]);
+    for (const spelling of spellings) {
+      let raw: string | null;
+      try {
+        raw = headers.get(spelling);
+      } catch {
+        continue; // defensive: a hostile/broken reader falls through to the next spelling
+      }
+      if (typeof raw !== "string") continue;
+      const value = raw.split(",")[0]?.trim() ?? "";
+      if (value) return value;
     }
   }
-  return [];
+  return "";
+}
+
+/** What Callflow extracts from a Dograh webhook body. */
+export interface DograhWebhookPayload {
+  /** Dograh's call identifier — the upsert key (one row per callId, ever). */
+  callId: string;
+  /** Raw status string as delivered ("" when the template sent none). */
+  status: string;
+  durationSeconds: number | null;
+  customerName: string | null;
+  callerNumber: string;
+  calledNumber: string;
 }
 
 /**
- * Extract a Callflow-shaped event from an arbitrary Dograh webhook payload.
- * Returns null only when the payload carries neither a caller number nor a
- * run id (i.e. it is not a call result at all).
+ * Extract the webhook contract fields from a parsed JSON body. Returns null
+ * when the body is not an object or carries no callId — the handler maps both
+ * to 400. Extra fields are ignored.
  */
-export function extractDograhEvent(
-  body: Record<string, unknown>,
-  headers?: HeaderReader
-): DograhCallEvent | null {
-  const initial = asContext(body.initial_context ?? body.initialContext);
-  const gathered = asContext(body.gathered_context ?? body.gatheredContext);
-  const costInfo = asContext(body.cost_info ?? body.costInfo);
-
-  const runId =
-    firstString(
-      body.workflow_run_id,
-      body.run_id,
-      body.call_id,
-      headers?.get("x-dograh-workflow-run-id")
-    ) || null;
-  const deliveryId =
-    firstString(body.delivery_id, headers?.get("x-dograh-delivery-id")) || null;
-
-  const callerNumber = firstString(
-    body.caller_number,
-    initial.caller_number,
-    body.from_number,
-    body.from,
-    body.caller
+export function parseDograhWebhookBody(body: unknown): DograhWebhookPayload | null {
+  if (!isPlainObject(body)) return null;
+  const callId = firstString(
+    body.callId,
+    body.call_id,
+    body.workflow_run_id,
+    body.run_id
   );
-  const calledNumber = firstString(
-    body.called_number,
-    initial.called_number,
-    body.to_number,
-    body.to,
-    body.dialed_number
-  );
-  if (!callerNumber && !runId) return null;
+  if (!callId) return null;
 
-  const disposition = firstString(
-    body.mapped_call_disposition,
-    gathered.mapped_call_disposition,
-    body.call_disposition,
-    gathered.call_disposition
-  );
-  const outcome = mapDispositionToOutcome(disposition);
-
-  const durationSeconds = firstFiniteNumber(
-    body.duration_seconds,
-    body.duration,
-    gathered.duration_seconds,
-    costInfo.call_duration_seconds
-  );
-  const startedMs = parseTimestamp(body.call_time, body.started_at, body.created_at);
-  const startedAt = new Date(startedMs ?? Date.now()).toISOString();
-  const endedMs =
-    parseTimestamp(body.call_ended_at, body.ended_at) ??
-    (startedMs !== null && durationSeconds !== null
-      ? startedMs + durationSeconds * 1000
-      : null);
-
+  // gathered.context.customer_name is the documented path; the template
+  // renderer may stringify `gathered` itself, and older templates used
+  // gathered_context or a flat customer_name — all are accepted.
+  const gathered = asContext(body.gathered ?? body.gatheredContext);
+  const gatheredContext = asContext(body.gathered_context ?? body.gatheredContext);
+  const context = asContext(gathered.context);
   const customerName =
     firstString(
-      body.customer_name,
-      body.caller_name,
+      context.customer_name,
       gathered.customer_name,
-      gathered.caller_name,
-      gathered.appointment_name,
-      gathered.name
+      gatheredContext.customer_name,
+      body.customer_name,
+      body.caller_name
     ) || null;
 
-  // MVP job details — every field is optional ("when available"). The Dograh
-  // workflow template decides which variables exist; unmapped ones simply
-  // stay null and the dashboard shows "Not captured" instead of guessing.
-  const serviceRequested =
-    firstString(
-      body.service_requested,
-      body.reason,
-      gathered.service_requested,
-      gathered.service_type,
-      gathered.job_type,
-      gathered.service
-    ).slice(0, MAX_DETAIL_CHARS) || null;
-  const urgency =
-    canonicalUrgency(
-      firstString(
-        body.urgency,
-        gathered.urgency,
-        gathered.urgency_level,
-        gathered.priority
-      ).slice(0, MAX_DETAIL_CHARS)
-    ) || null;
-  const preferredCallbackTime =
-    firstString(
-      body.preferred_callback_time,
-      gathered.preferred_callback_time,
-      gathered.callback_time,
-      gathered.best_time_to_call,
-      gathered.preferred_time
-    ).slice(0, MAX_DETAIL_CHARS) || null;
-
+  const initial = asContext(body.initial_context ?? body.initialContext);
   return {
-    deliveryId,
-    runId,
-    workflowName:
-      firstString(body.workflow_name, body.workflow_id) ||
-      headers?.get("x-dograh-workflow-id") ||
-      null,
-    direction: (firstString(body.direction, initial.direction) || "inbound").toLowerCase(),
-    callerNumber,
-    calledNumber,
-    disposition,
-    outcome,
-    callStatus: deriveCallStatus(outcome, disposition, durationSeconds),
-    startedAt,
-    endedAt: endedMs !== null ? new Date(endedMs).toISOString() : null,
-    durationSeconds,
-    recordingUrl: firstString(body.recording_url) || null,
-    transcriptUrl: firstString(body.transcript_url) || null,
-    transcriptText: flattenTranscript(
-      typeof body.transcript === "string" ? body.transcript : null
-    ),
+    callId,
+    status: firstString(body.status, body.call_status),
+    durationSeconds: firstFiniteNumber(body.duration, body.duration_seconds),
     customerName,
-    callbackNumber: firstString(body.callback_number, gathered.callback_number) || null,
-    calendarEventId:
-      firstString(
-        body.calendar_event_id,
-        gathered.calendar_event_id,
-        gathered.google_event_id,
-        gathered.gcal_event_id
-      ) || null,
-    serviceRequested,
-    urgency,
-    preferredCallbackTime,
+    callerNumber: firstString(body.caller_number, initial.caller_number),
+    calledNumber: firstString(body.called_number, initial.called_number),
   };
 }
-
-/* ------------------------------ authentication ----------------------------- */
-
-export function dograhWebhookSecret(): string {
-  return normalizeEnvValue(process.env.DOGRAH_WEBHOOK_SECRET);
-}
-
-function sha256(value: string): Buffer {
-  return createHash("sha256").update(value, "utf8").digest();
-}
-
-function secretsMatch(provided: string, expected: string): boolean {
-  return timingSafeEqual(sha256(provided), sha256(expected));
-}
-
-/**
- * Accepted secret placements (all compared against DOGRAH_WEBHOOK_SECRET):
- * 1. `X-Webhook-Secret` header (the webhook contract's primary placement),
- * 2. `X-Callflow-Secret` custom header (Dograh webhook nodes support custom
- *    headers verbatim),
- * 3. `Authorization: Bearer <secret>` (Dograh credential binding),
- * 4. `?key=<secret>` query param (works with any configuration).
- * When DOGRAH_WEBHOOK_SECRET is unset this check treats the request as
- * authorized — same open-by-default convention as APP_AUTH_TOKEN, convenient
- * for local dev and the first pilot smoke tests. Production is NOT affected:
- * handleDograhWebhook rejects every request with 503 while the secret is
- * unset, so the open behavior can only apply outside production.
- */
-export function isDograhRequestAuthorized(
-  headers: HeaderReader,
-  searchParams: URLSearchParams
-): boolean {
-  const secret = dograhWebhookSecret();
-  if (!secret) return true;
-
-  const bearer = headers.get("authorization") ?? "";
-  const bearerToken = /^bearer\s+(.+)$/i.exec(bearer.trim())?.[1]?.trim() ?? "";
-  const provided = firstString(
-    headers.get("x-webhook-secret"),
-    headers.get("x-callflow-secret"),
-    bearerToken,
-    searchParams.get("key")
-  );
-  return provided ? secretsMatch(provided, secret) : false;
-}
-
-
-

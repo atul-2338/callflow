@@ -60,6 +60,7 @@ CREATE TABLE IF NOT EXISTS calls (
   callbackNumber TEXT,
   calendarEventId TEXT,
   transcriptUrl TEXT,
+  rawPayload TEXT,
   serviceRequested TEXT,
   urgency TEXT,
   preferredCallbackTime TEXT,

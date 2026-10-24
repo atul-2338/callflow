@@ -1,39 +1,62 @@
 import fs from "fs";
 import os from "os";
 import path from "path";
-import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
-import { buildDograhFixture, type DograhFixtureName } from "./dograh-fixtures";
-import type { CallAlertEmailInput, EmailSendResult } from "./email";
-import { handleDograhWebhook } from "./dograh-webhook";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import {
+  deliverOwnerPush,
+  handleDograhWebhook,
+  type OwnerPushPlan,
+} from "./dograh-webhook";
+import type { NotifyMissedCallResult } from "./firebase";
 
 /**
- * End-to-end ingestion tests: real SQLite (temp DATABASE_PATH), real matcher,
- * real fixtures. Firebase is never contacted (no FCM token row / no service
- * account), and transcript URL fetches are stubbed — no network at all.
+ * End-to-end ingestion tests for POST /api/webhooks/dograh: real SQLite (temp
+ * DATABASE_PATH), real matcher, real upsert. Firebase/FCM is never contacted —
+ * the push plan is inspected and deliverOwnerPush gets an injected sender.
  */
 
-let tmpDir = "";
-const noFetch = async () => null;
+const SERVER_SECRET = "test-webhook-secret";
 
-function fire(
-  name: DograhFixtureName,
-  overrides?: Parameters<typeof buildDograhFixture>[1]
-) {
-  const fixture = buildDograhFixture(name, overrides);
+let tmpDir = "";
+
+function authHeaders(value: string = SERVER_SECRET): Headers {
+  return new Headers({
+    "content-type": "application/json",
+    "x-webhook-secret": value,
+  });
+}
+
+function body(overrides: Record<string, unknown> = {}) {
   return {
-    fixture,
-    result: handleDograhWebhook({
-      body: fixture.payload,
-      headers: new Headers(fixture.headers),
-      fetchTranscript: noFetch,
-    }),
+    callId: "call-1",
+    status: "completed",
+    duration: "184",
+    caller_number: "+15550000123",
+    called_number: "+15550001111",
+    gathered: JSON.stringify({ context: { customer_name: "Priya Raman" } }),
+    ...overrides,
   };
+}
+
+function fire(overrides: Record<string, unknown> = {}) {
+  return handleDograhWebhook({ body: body(overrides), headers: authHeaders() });
+}
+
+function setFcmToken(token: string) {
+  return import("./database").then(({ getDb }) =>
+    getDb()
+      .prepare(
+        `INSERT INTO settings (id, missedCallReplyTemplate, fcmToken) VALUES (1, '', ?)
+         ON CONFLICT(id) DO UPDATE SET fcmToken = excluded.fcmToken`
+      )
+      .run(token)
+  );
 }
 
 beforeAll(async () => {
   tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "callflow-dograh-"));
   process.env.DATABASE_PATH = path.join(tmpDir, "test.db");
-  delete process.env.DOGRAH_WEBHOOK_SECRET;
+  process.env.WEBHOOK_SECRET = SERVER_SECRET;
   delete process.env.PLIVO_NUMBER;
 
   const { createBusiness } = await import("./db");
@@ -56,550 +79,220 @@ afterAll(async () => {
   }
   if (tmpDir) fs.rmSync(tmpDir, { recursive: true, force: true });
   delete process.env.DATABASE_PATH;
+  delete process.env.WEBHOOK_SECRET;
 });
 
-describe("handleDograhWebhook — happy path", () => {
-  it("stores a booked call, matches the sole pilot business, reports push skip", async () => {
-    const { fixture, result } = fire("booked");
-    const res = await result;
-    expect(res.status).toBe(200);
-    expect(res.body).toMatchObject({
-      ok: true,
-      duplicate: false,
-      matchedBusiness: true,
-      outcome: "booked",
+describe("auth — x-webhook-secret vs WEBHOOK_SECRET", () => {
+  it("401s on a wrong secret and writes nothing", async () => {
+    const res = await handleDograhWebhook({
+      body: body({ callId: "auth-bad" }),
+      headers: authHeaders("wrong"),
     });
-    expect(res.body.push).toEqual({ sent: false, error: "No FCM token configured" });
+    expect(res.status).toBe(401);
+    expect(res.body).toEqual({ error: "unauthorized" });
+    const { getCalls } = await import("./db");
+    expect((await getCalls()).filter((c) => c.dograhRunId === "auth-bad")).toHaveLength(0);
+  });
 
-    const { getCallByDograhRunId } = await import("./db");
-    const runId = fixture.payload.workflow_run_id as string;
-    const call = await getCallByDograhRunId(runId);
-    expect(call).not.toBeNull();
+  it("401s when the header is missing", async () => {
+    const res = await handleDograhWebhook({ body: body(), headers: new Headers() });
+    expect(res.status).toBe(401);
+  });
+
+  it("401s when the server has no WEBHOOK_SECRET configured (fail closed)", async () => {
+    delete process.env.WEBHOOK_SECRET;
+    try {
+      const res = await handleDograhWebhook({ body: body(), headers: authHeaders() });
+      expect(res.status).toBe(401);
+    } finally {
+      process.env.WEBHOOK_SECRET = SERVER_SECRET;
+    }
+  });
+
+  it("accepts the correct secret under any header-name casing", async () => {
+    const titleCase = await handleDograhWebhook({
+      body: body({ callId: "case-1" }),
+      headers: new Headers({ "X-Webhook-Secret": SERVER_SECRET }),
+    });
+    expect(titleCase.status).toBe(200);
+
+    // A case-sensitive header bag (raw Node record style) also matches.
+    const strict = { get: (name: string) => (name === "X-Webhook-Secret" ? SERVER_SECRET : null) };
+    const res = await handleDograhWebhook({
+      body: body({ callId: "case-2" }),
+      headers: strict,
+    });
+    expect(res.status).toBe(200);
+  });
+});
+
+describe("validation", () => {
+  it("400s when the body was not valid JSON", async () => {
+    const res = await handleDograhWebhook({
+      body: null,
+      headers: authHeaders(),
+      jsonInvalid: true,
+    });
+    expect(res.status).toBe(400);
+    expect(res.body).toEqual({ error: "request body must be valid JSON" });
+  });
+
+  it("400s when callId is missing (and for non-object bodies)", async () => {
+    for (const bad of [{ junk: true }, "not-an-object", { callId: "   " }]) {
+      const res = await handleDograhWebhook({ body: bad, headers: authHeaders() });
+      expect(res.status).toBe(400);
+      expect(res.body).toEqual({ error: "callId is required" });
+    }
+  });
+});
+
+describe("happy path + persistence", () => {
+  it("stores the call, links the business, keeps the raw payload, ignores extras", async () => {
+    const res = await fire({
+      callId: "store-1",
+      totally_unknown_field: { even: ["objects"] },
+    });
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ ok: true });
+    expect(res.callId).toBe("store-1");
+    expect(res.created).toBe(true);
+    expect(res.pushPlan).toBeNull(); // no FCM token registered yet
+
+    const { getAllBusinesses, getCallByDograhRunId, getCalls } = await import("./db");
+    const sole = (await getAllBusinesses())[0];
+    const call = await getCallByDograhRunId("store-1");
     expect(call).toMatchObject({
+      businessId: sole.id,
       callerNumber: "+15550000123",
-      businessNumber: "+15559998888",
-      callStatus: "answered",
-      dograhDisposition: "appointment_booked",
-      outcome: "booked",
+      businessNumber: "+15550001111",
+      callStatus: "answered", // unknown status "completed" → answered
       durationSeconds: 184,
       customerName: "Priya Raman",
-      calendarEventId: "evt_fixture_9f2c",
+      // calls.outcome stays null in the DB; the row mapper in db.ts
+      // normalizes a null/unknown outcome to "other" for the dashboard.
+      outcome: "other",
+      dograhDeliveryId: null,
     });
-    expect(call!.dograhDeliveryId).toBeTruthy();
-    expect(call!.transcriptUrl).toContain("/transcript");
+    expect(JSON.parse(call!.rawPayload!)).toMatchObject({
+      callId: "store-1",
+      totally_unknown_field: { even: ["objects"] },
+    });
+    expect((await getCalls()).filter((c) => c.dograhRunId === "store-1")).toHaveLength(1);
   });
 
-  it("ingests the minimal contract payload (call_id) and falls back the callback number", async () => {
-    const payload = {
-      call_id: "731013",
-      workflow_id: "11658",
-      caller_number: "+15551234567",
-      caller_name: "Alex",
-      callback_number: "",
-      reason: "Burst main pipe causing water leakage in kitchen",
-      urgency: "emergency",
-      duration: "78",
-      recording_url: "https://rec.example/731013",
-      transcript_url: "https://tr.example/731013",
-    };
-    const fireContract = () =>
-      handleDograhWebhook({
-        body: payload,
-        headers: new Headers({ "content-type": "application/json" }),
-        fetchTranscript: noFetch,
-      });
-
-    const first = await fireContract();
-    expect(first.status).toBe(200);
-    expect(first.body).toMatchObject({ ok: true, duplicate: false });
-
+  it("maps a known status verbatim (voicemail_left)", async () => {
+    await fire({ callId: "status-vm", status: "voicemail_left" });
     const { getCallByDograhRunId } = await import("./db");
-    const row = await getCallByDograhRunId("731013");
+    expect((await getCallByDograhRunId("status-vm"))!.callStatus).toBe("voicemail_left");
+  });
+
+  it("upserts: the same callId twice updates the one row", async () => {
+    const first = await fire({ callId: "dup-1", duration: "10" });
+    expect(first.created).toBe(true);
+
+    const second = await fire({
+      callId: "dup-1",
+      duration: "210",
+      status: "voicemail_left",
+      gathered: JSON.stringify({ context: { customer_name: "Updated Name" } }),
+    });
+    expect(second.status).toBe(200);
+    expect(second.body).toEqual({ ok: true });
+    expect(second.created).toBe(false);
+    expect(second.pushPlan).toBeNull(); // never re-push on updates
+
+    const { getCalls, getCallByDograhRunId } = await import("./db");
+    expect((await getCalls()).filter((c) => c.dograhRunId === "dup-1")).toHaveLength(1);
+    const row = await getCallByDograhRunId("dup-1");
     expect(row).toMatchObject({
-      dograhRunId: "731013",
-      callerNumber: "+15551234567",
-      customerName: "Alex",
-      // callback_number was empty → stored as the caller number instead.
-      callbackNumber: "+15551234567",
-      serviceRequested: "Burst main pipe causing water leakage in kitchen",
-      urgency: "emergency",
-      durationSeconds: 78,
+      durationSeconds: 210,
+      callStatus: "voicemail_left",
+      customerName: "Updated Name",
     });
-
-    // Same call_id redelivered (Dograh retry): stored once, still 200.
-    const replay = await fireContract();
-    expect(replay.status).toBe(200);
-    expect(replay.body).toMatchObject({ ok: true, duplicate: true });
-    expect(replay.body.callId).toEqual(first.body.callId);
   });
 
-  it("sends the pilot notification text: urgency, name, reason, callback number", async () => {
-    const { saveSettings } = await import("./db");
-    await saveSettings({
-      missedCallReplyTemplate: "tpl",
-      fcmToken: "device-token-text",
-    });
-
-    const captured = { title: "", body: "" };
-    const payload = {
-      call_id: "731014",
-      workflow_id: "11658",
-      caller_number: "+15551234567",
-      caller_name: "Alex",
-      callback_number: "+15557654321",
-      reason: "Burst main pipe causing water leakage in kitchen",
-      urgency: "emergency",
-      duration: "78",
-      call_disposition: "callback_requested",
-      mapped_call_disposition: "callback_requested",
-    };
-    const res = await handleDograhWebhook({
-      body: payload,
-      headers: new Headers({ "content-type": "application/json" }),
-      fetchTranscript: noFetch,
-      sendPush: async (_token, title, body) => {
-        captured.title = title;
-        captured.body = body;
-        return { sent: true, messageId: "m-text-1" };
-      },
-    });
-
+  it("links a call whose called_number matches no business to the sole business", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const res = await fire({ callId: "fallback-1", called_number: "+19999999999" });
     expect(res.status).toBe(200);
-    expect(res.body.push).toMatchObject({ sent: true });
-    expect(captured.title).toBe("📞 Callback requested");
-    expect(captured.body).toBe(
-      "emergency call from Alex: Burst main pipe causing water leakage in kitchen. Call back: +15557654321"
-    );
-  });
-
-  it("is idempotent across retries with the same or a new delivery id", async () => {
-    const runId = "dup-run-1";
-    const first = buildDograhFixture("callback", { workflow_run_id: runId });
-    const firstRes = await handleDograhWebhook({
-      body: first.payload,
-      headers: new Headers(first.headers),
-      fetchTranscript: noFetch,
-    });
-    expect(firstRes.body.duplicate).toBe(false);
-
-    // Dograh regenerates the delivery id on retries but keeps the run id.
-    const second = buildDograhFixture("callback", { workflow_run_id: runId });
-    const replayed = await handleDograhWebhook({
-      body: second.payload,
-      headers: new Headers(second.headers),
-      fetchTranscript: noFetch,
-    });
-    expect(replayed.status).toBe(200);
-    expect(replayed.body).toMatchObject({ ok: true, duplicate: true });
-    expect(replayed.body.callId).toEqual(firstRes.body.callId);
-
-    const { getCalls } = await import("./db");
-    const rows = (await getCalls()).filter((c) => c.dograhRunId === runId);
-    expect(rows).toHaveLength(1);
-  });
-
-  it("persists an inline voicemail transcript", async () => {
-    const res = await fire("voicemail").result;
-    expect(res.body).toMatchObject({ ok: true, outcome: "voicemail" });
-    const { getCalls } = await import("./db");
-    const row = (await getCalls()).find((c) => c.outcome === "voicemail");
-    expect(row!.callStatus).toBe("voicemail_left");
-    expect(row!.transcript).toContain("Sam");
-    expect(row!.customerName).toBe("Sam Torres");
-  });
-
-  it("flattens a transcript fetched from the Dograh public URL", async () => {
-    const fixture = buildDograhFixture("handled");
-    const res = await handleDograhWebhook({
-      body: fixture.payload,
-      headers: new Headers(fixture.headers),
-      fetchTranscript: async () =>
-        JSON.stringify([
-          { role: "user", text: "What are your hours?" },
-          { role: "agent", text: "Nine to five weekdays." },
-        ]),
-    });
-    expect(res.body.transcriptStored).toBe(true);
-    const { getCallByDograhRunId } = await import("./db");
-    const row = await getCallByDograhRunId(fixture.payload.workflow_run_id as string);
-    expect(row!.transcript).toBe(
-      "Caller: What are your hours?\nAgent: Nine to five weekdays."
-    );
-  });
-});
-
-describe("handleDograhWebhook — rejection paths", () => {
-  it("400s on non-object payloads and payloads with no caller or run id", async () => {
-    const badBody = await handleDograhWebhook({
-      body: "not-an-object",
-      headers: new Headers(),
-    });
-    expect(badBody.status).toBe(400);
-
-    const empty = await handleDograhWebhook({
-      body: { junk: true },
-      headers: new Headers(),
-    });
-    expect(empty.status).toBe(400);
-  });
-
-  it("401s without the secret once DOGRAH_WEBHOOK_SECRET is set", async () => {
-    process.env.DOGRAH_WEBHOOK_SECRET = "fixture-secret";
-    try {
-      const fixture = buildDograhFixture("booked");
-      const unauthorized = await handleDograhWebhook({
-        body: fixture.payload,
-        headers: new Headers(fixture.headers),
-      });
-      expect(unauthorized.status).toBe(401);
-
-      const authorized = await handleDograhWebhook({
-        body: fixture.payload,
-        headers: new Headers({
-          ...fixture.headers,
-          "x-callflow-secret": "fixture-secret",
-        }),
-        fetchTranscript: noFetch,
-      });
-      expect(authorized.status).toBe(200);
-      expect(authorized.body.duplicate).toBe(false);
-    } finally {
-      delete process.env.DOGRAH_WEBHOOK_SECRET;
-    }
-  });
-
-  it("503s every request in production when DOGRAH_WEBHOOK_SECRET is unset", async () => {
-    vi.stubEnv("NODE_ENV", "production");
-    try {
-      const fixture = buildDograhFixture("booked");
-      const closed = await handleDograhWebhook({
-        body: fixture.payload,
-        headers: new Headers({
-          ...fixture.headers,
-          "x-callflow-secret": "anything",
-        }),
-        fetchTranscript: noFetch,
-      });
-      expect(closed.status).toBe(503);
-      expect(closed.body.error).toMatch(/secret not configured/);
-
-      // Nothing was persisted — the fail-closed path runs before any write.
-      const { getCallByDograhRunId } = await import("./db");
-      const row = await getCallByDograhRunId(
-        fixture.payload.workflow_run_id as string
-      );
-      expect(row).toBeNull();
-    } finally {
-      vi.unstubAllEnvs();
-    }
-  });
-
-  it("links a call to the sole business even when called_number matches nothing", async () => {
-    // Pilot fallback: with a single business, a called_number that matches no
-    // row still links rather than orphaning the call (and the row keeps the
-    // dialled number for later re-linking/debugging).
-    const fixture = buildDograhFixture("unmatched", { workflow_run_id: "731500" });
-    const res = await handleDograhWebhook({
-      body: fixture.payload,
-      headers: new Headers(fixture.headers),
-      fetchTranscript: noFetch,
-    });
-    expect(res.status).toBe(200);
-    expect(res.body).toMatchObject({ ok: true, matchedBusiness: true });
-
     const { getAllBusinesses, getCallByDograhRunId } = await import("./db");
     const sole = (await getAllBusinesses())[0];
-    const row = await getCallByDograhRunId("731500");
-    expect(row!.businessId).toBe(sole.id);
-    expect(row!.businessNumber).toBe("+19998887777");
+    expect((await getCallByDograhRunId("fallback-1"))!.businessId).toBe(sole.id);
+    warn.mockRestore();
   });
+});
 
-  it("records calls for an unknown number without matching a business", async () => {
-    // Two businesses exist → the sole-business fallback is disabled, so a
-    // called_number that hits no businesses.phoneNumber lands unmatched while
-    // an exact hit still matches directly.
-    const { createBusiness } = await import("./db");
-    await createBusiness({
-      phoneNumber: "+15550002222",
-      carrier: "other",
-      forwardingStatus: "active",
-      lastVerifiedAt: null,
-      pendingVerificationFor: null,
-      pendingVerificationExpiresAt: null,
-    });
+describe("owner push (scheduled after the response)", () => {
+  function fakeSend(result: Partial<NotifyMissedCallResult>) {
+    return vi.fn(
+      async (
+        _token: string,
+        _title: string,
+        _body: string,
+        _data?: Record<string, string>
+      ): Promise<NotifyMissedCallResult> => ({ sent: true, messageId: "m-1", ...result })
+    );
+  }
 
-    const directFixture = buildDograhFixture("booked", {
-      called_number: "+15550002222",
-    });
-    const direct = await handleDograhWebhook({
-      body: directFixture.payload,
-      headers: new Headers(directFixture.headers),
-      fetchTranscript: noFetch,
-    });
-    expect(direct.body).toMatchObject({ ok: true, matchedBusiness: true });
+  it("builds a push plan for NEW calls; deliverOwnerPush sends it", async () => {
+    await setFcmToken("token-abc");
 
-    const unmatchedFixture = buildDograhFixture("unmatched");
-    const unmatched = await handleDograhWebhook({
-      body: unmatchedFixture.payload,
-      headers: new Headers(unmatchedFixture.headers),
-      fetchTranscript: noFetch,
-    });
-    expect(unmatched.status).toBe(200);
-    expect(unmatched.body).toMatchObject({ ok: true, matchedBusiness: false });
+    const res = await fire({ callId: "push-1" });
+    expect(res.status).toBe(200);
+    expect(res.pushPlan).toMatchObject({ fcmToken: "token-abc", title: "✅ Call handled" });
+    expect(res.pushPlan!.body).toContain("Priya Raman");
 
     const { getCallByDograhRunId } = await import("./db");
-    const row = await getCallByDograhRunId(
-      unmatchedFixture.payload.workflow_run_id as string
+    const row = await getCallByDograhRunId("push-1");
+    expect(res.pushPlan!.data).toEqual({
+      callId: row!.id,
+      callerNumber: "+15550000123",
+    });
+
+    const send = fakeSend({});
+    await deliverOwnerPush(res.pushPlan!, send);
+    expect(send).toHaveBeenCalledWith(
+      "token-abc",
+      "✅ Call handled",
+      expect.stringContaining("Priya Raman"),
+      expect.objectContaining({ callId: row!.id })
     );
-    expect(row!.businessId).toBeNull();
-    expect(row!.businessNumber).toBe("+19998887777");
-    // Raw disposition survives even when the mapped outcome is "other" —
-    // this is what makes a real-world mapping miss diagnosable from the DB.
-    expect(row!.dograhDisposition).toBe("unknown");
-    expect(row!.outcome).toBe("other");
-  });
-});
 
-describe("handleDograhWebhook — push token lifecycle", () => {
-  function fireWithPush(runId: string, sendPush: NonNullable<Parameters<typeof handleDograhWebhook>[0]["sendPush"]>) {
-    const fixture = buildDograhFixture("callback", { workflow_run_id: runId });
-    return handleDograhWebhook({
-      body: fixture.payload,
-      headers: new Headers(fixture.headers),
-      fetchTranscript: noFetch,
-      sendPush,
-    });
-  }
-
-  it("keeps the token on transient failures and successful sends", async () => {
-    const { saveSettings, getBusinessFcmToken } = await import("./db");
-    await saveSettings({
-      missedCallReplyTemplate: "tpl",
-      fcmToken: "device-token-1",
-    });
-
-    const flaky = await fireWithPush("push-transient-1", async () => ({
-      sent: false,
-      error: "FCM service unavailable",
-    }));
-    expect(flaky.status).toBe(200);
-    expect(flaky.body).toMatchObject({ pushTokenCleared: false });
-    expect(await getBusinessFcmToken()).toBe("device-token-1");
-
-    const ok = await fireWithPush("push-success-1", async () => ({
-      sent: true,
-      messageId: "projects/callflow/messages/mid-1",
-    }));
-    expect(ok.body).toMatchObject({ pushTokenCleared: false });
-    expect(ok.body.push).toEqual({
-      sent: true,
-      messageId: "projects/callflow/messages/mid-1",
-    });
-    expect(await getBusinessFcmToken()).toBe("device-token-1");
+    await setFcmToken(""); // cleanup for later tests
   });
 
-  it("clears the stored token when FCM reports it unregistered, then skips push", async () => {
-    const { saveSettings, getBusinessFcmToken } = await import("./db");
-    await saveSettings({
-      missedCallReplyTemplate: "tpl",
-      fcmToken: "device-token-dead",
-    });
-
-    let attemptedToken: string | null = null;
-    const dead = await fireWithPush("push-dead-1", async (token) => {
-      attemptedToken = token;
-      // What firebase-admin's FcmError maps to for messaging/unregistered.
-      return {
-        sent: false,
-        error: "Registration token is not registered",
-        invalidToken: true,
-      };
-    });
-    expect(dead.status).toBe(200);
-    expect(attemptedToken).toBe("device-token-dead");
-    expect(dead.body).toMatchObject({ pushTokenCleared: true });
-    expect(await getBusinessFcmToken()).toBe("");
-
-    // Next delivery takes the no-token path — sendPush is never called again.
-    const next = buildDograhFixture("callback", { workflow_run_id: "push-dead-2" });
-    const after = await handleDograhWebhook({
-      body: next.payload,
-      headers: new Headers(next.headers),
-      fetchTranscript: noFetch,
-      sendPush: async () => {
-        throw new Error("sendPush must not be called after the token was cleared");
-      },
-    });
-    expect(after.status).toBe(200);
-    expect(after.body).toMatchObject({
-      pushTokenCleared: false,
-      push: { sent: false, error: "No FCM token configured" },
-    });
-  });
-});
-
-describe("handleDograhWebhook — email alert", () => {
-  const OWNER_EMAIL = "owner-alert@example.com";
-
-  function stubSmtp() {
-    vi.stubEnv("SMTP_HOST", "smtp.test.local");
-    vi.stubEnv("SMTP_PORT", "587");
-    vi.stubEnv("SMTP_USER", "alerts@test.local");
-    vi.stubEnv("SMTP_PASS", "test-pass");
-    vi.stubEnv("SMTP_FROM", "Callflow <alerts@test.local>");
-  }
-
-  async function saveOwnerEmail(email: string | null) {
-    const { getBusinessByPhone, updateBusiness } = await import("./db");
-    const business = await getBusinessByPhone("+15550001111");
-    if (!business) throw new Error("pilot business missing");
-    await updateBusiness(business.id, { notificationEmail: email });
-  }
-
-  function fireWithEmail(
-    name: DograhFixtureName,
-    runId: string,
-    sendEmail: NonNullable<Parameters<typeof handleDograhWebhook>[0]["sendEmail"]>
-  ) {
-    // Dial the pilot's own number: by the time these tests run, a second
-    // business exists, so the single-business fallback in matchDograhBusiness
-    // no longer applies and the call must match directly to reach the email.
-    const fixture = buildDograhFixture(name, {
-      workflow_run_id: runId,
-      called_number: "+15550001111",
-    });
-    return handleDograhWebhook({
-      body: fixture.payload,
-      headers: new Headers(fixture.headers),
-      fetchTranscript: noFetch,
-      sendEmail,
-    });
-  }
-
-  afterEach(async () => {
-    await saveOwnerEmail(null);
-    vi.unstubAllEnvs();
+  it("never re-pushes on the duplicate path", async () => {
+    await setFcmToken("token-dup");
+    const first = await fire({ callId: "push-dup-1" });
+    expect(first.pushPlan).not.toBeNull();
+    const second = await fire({ callId: "push-dup-1", duration: "9" });
+    expect(second.pushPlan).toBeNull();
+    await setFcmToken("");
   });
 
-  it("emails the saved business address on a NEW call and never on the duplicate retry", async () => {
-    stubSmtp();
-    await saveOwnerEmail(OWNER_EMAIL);
-    const sendEmail =
-      vi.fn<(input: CallAlertEmailInput, to: string) => Promise<EmailSendResult>>(
-        async () => ({ sent: true, messageId: "mid-email-1" })
-      );
-
-    const first = await fireWithEmail("callback", "email-new-1", sendEmail);
-    expect(first.status).toBe(200);
-    expect(first.body).toMatchObject({ ok: true, duplicate: false });
-    expect(sendEmail).toHaveBeenCalledTimes(1);
-    const [input, to] = sendEmail.mock.calls[0];
-    expect(to).toBe(OWNER_EMAIL);
-    expect(input).toMatchObject({
-      name: "Priya Raman",
-      urgency: "Urgent — water spreading, customer mopping",
-      callbackNumber: "+15550000123",
-      dashboardUrl: "http://localhost:3000/calls",
-    });
-    expect(first.body.email).toEqual({ sent: true, messageId: "mid-email-1" });
-
-    // Same run again → the duplicate path returned before this code runs.
-    const sendEmailAgain =
-      vi.fn<(input: CallAlertEmailInput, to: string) => Promise<EmailSendResult>>(
-        async () => ({ sent: true, messageId: "mid-email-2" })
-      );
-    const retry = await fireWithEmail("callback", "email-new-1", sendEmailAgain);
-    expect(retry.body).toMatchObject({ duplicate: true });
-    expect(sendEmailAgain).not.toHaveBeenCalled();
-  });
-
-  it("passes an emergency urgency through for the EMERGENCY subject", async () => {
-    stubSmtp();
-    await saveOwnerEmail(OWNER_EMAIL);
-    const sendEmail =
-      vi.fn<(input: CallAlertEmailInput, to: string) => Promise<EmailSendResult>>(
-        async () => ({ sent: true, messageId: "mid-email-3" })
-      );
-    const fixture = buildDograhFixture("callback", {
-      workflow_run_id: "email-emergency-1",
-      called_number: "+15550001111",
-    });
-    const payload = {
-      ...fixture.payload,
-      caller_name: "Dana Reed",
-      urgency: "emergency",
+  it("forgets a dead FCM token when FCM reports it invalid", async () => {
+    await setFcmToken("token-dead");
+    const send = fakeSend({ sent: false, error: "unregistered", invalidToken: true });
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const plan: OwnerPushPlan = {
+      fcmToken: "token-dead",
+      title: "t",
+      body: "b",
+      data: {},
     };
-    const result = await handleDograhWebhook({
-      body: payload,
-      headers: new Headers(fixture.headers),
-      fetchTranscript: noFetch,
-      sendEmail,
-    });
-    expect(result.status).toBe(200);
-    expect(sendEmail).toHaveBeenCalledTimes(1);
-    expect(sendEmail.mock.calls[0][0]).toMatchObject({
-      name: "Dana Reed",
-      urgency: "emergency",
-      reason: "Water heater leaking in the garage",
-    });
-  });
-
-  it("keeps the webhook at 200 when the email send fails", async () => {
-    stubSmtp();
-    await saveOwnerEmail(OWNER_EMAIL);
-    const sendEmail =
-      vi.fn<(input: CallAlertEmailInput, to: string) => Promise<EmailSendResult>>(
-        async () => {
-          throw new Error("SMTP connection refused");
-        }
-      );
-    const result = await fireWithEmail("booked", "email-fail-1", sendEmail);
-    expect(result.status).toBe(200);
-    expect(result.body).toMatchObject({ ok: true, duplicate: false });
-    expect(result.body.email).toEqual({
-      sent: false,
-      error: "SMTP connection refused",
-    });
-  });
-
-  it("skips with a warning when the business has no email saved", async () => {
-    stubSmtp();
-    const sendEmail =
-      vi.fn<(input: CallAlertEmailInput, to: string) => Promise<EmailSendResult>>(
-        async () => ({ sent: true, messageId: "mid-email-4" })
-      );
-    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
-    const result = await fireWithEmail("booked", "email-noaddr-1", sendEmail);
-    expect(result.status).toBe(200);
-    expect(sendEmail).not.toHaveBeenCalled();
-    expect(result.body.email).toEqual({
-      sent: false,
-      error: "No notification email saved",
-    });
-    expect(warn).toHaveBeenCalledWith(expect.stringContaining("Email alert skipped"));
+    await deliverOwnerPush(plan, send);
     warn.mockRestore();
+
+    const { getBusinessFcmToken } = await import("./db");
+    expect(await getBusinessFcmToken()).toBe("");
   });
 
-  it("skips when the SMTP environment variables are missing", async () => {
-    vi.stubEnv("SMTP_HOST", "");
-    vi.stubEnv("SMTP_PORT", "");
-    vi.stubEnv("SMTP_USER", "");
-    vi.stubEnv("SMTP_PASS", "");
-    vi.stubEnv("SMTP_FROM", "");
-    await saveOwnerEmail(OWNER_EMAIL);
-    const sendEmail =
-      vi.fn<(input: CallAlertEmailInput, to: string) => Promise<EmailSendResult>>(
-        async () => ({ sent: true, messageId: "mid-email-5" })
-      );
+  it("logs a warning (and plans nothing) when no FCM token is registered", async () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
-    const result = await fireWithEmail("booked", "email-nosmtp-1", sendEmail);
-    expect(result.status).toBe(200);
-    expect(sendEmail).not.toHaveBeenCalled();
-    expect((result.body.email as { error?: string }).error).toContain(
-      "SMTP not configured"
-    );
-    expect(warn).toHaveBeenCalledWith(expect.stringContaining("SMTP"));
+    const res = await fire({ callId: "push-none-1" });
+    expect(res.status).toBe(200);
+    expect(res.pushPlan).toBeNull();
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining("Push skipped"));
     warn.mockRestore();
   });
 });
-

@@ -13,7 +13,13 @@ const SCHEMA_PATH = path.join(process.cwd(), "migrations", "schema.sql");
 let db: Database.Database | null = null;
 
 export function getDbPath(): string {
-  return process.env.DATABASE_PATH?.trim() || DEFAULT_DB_PATH;
+  const configured = process.env.DATABASE_PATH?.trim();
+  // A relative DATABASE_PATH (e.g. "./data/callflow.db") must never depend on
+  // whichever directory the server process happened to boot from: resolve it
+  // against the project cwd once, here, so the file the app opens is always
+  // the file the operator configured (and the ephemeral-host guard below
+  // inspects the real destination, not a cwd-relative guess).
+  return configured ? path.resolve(process.cwd(), configured) : DEFAULT_DB_PATH;
 }
 
 /** True when `child` is `parent` itself or lives underneath it. */
@@ -177,6 +183,7 @@ const CALL_ADDED_COLUMNS: ReadonlyArray<readonly [string, string]> = [
   ["followUpStatus", "TEXT NOT NULL DEFAULT 'none'"],
   ["followUpNotes", "TEXT NOT NULL DEFAULT ''"],
   ["followUpUpdatedAt", "TEXT"],
+  ["rawPayload", "TEXT"],
 ];
 
 // Same pattern as CALL_ADDED_COLUMNS, for the businesses table. `clientUid`
@@ -265,6 +272,10 @@ export function getDb(): Database.Database {
 
   const dbPath = getDbPath();
   assertPersistentDbPath(dbPath);
+  // Always log the resolved ABSOLUTE path once per boot: a webhook row "not
+  // appearing" is almost always a path/cwd mismatch, and this line makes the
+  // mismatch visible immediately in dev output or `journalctl -u callflow`.
+  console.log(`[database] opening SQLite database at ${dbPath}`);
   fs.mkdirSync(path.dirname(dbPath), { recursive: true });
 
   const instance = new Database(dbPath);

@@ -41,7 +41,7 @@ Copy `.env.example` to `.env.local` and fill in real values:
 | `TELNYX_NUMBER` | Your Telnyx number (E.164) that missed calls forward to |
 | `TELNYX_FORWARD_TO` | The Dograh agent number (E.164) that forwarded calls are transferred to |
 | `CALLFLOW_FORWARDING_DID` | The CallFlow forwarding number (E.164) shown in the setup wizard — served by `GET /api/setup/config` and used to build the carrier dial codes. Must match the real `PLIVO_NUMBER`/`TELNYX_NUMBER` DID. Unset or invalid = the wizard shows an error state (the endpoint answers 503). |
-| `DOGRAH_WEBHOOK_SECRET` | Shared secret the Dograh webhook node sends to `/api/webhooks/dograh` (header `X-Webhook-Secret` (or legacy `X-Callflow-Secret`), `Authorization: Bearer`, or `?key=` — any one suffices). Unset = endpoint is open **outside production**; in production the endpoint rejects every POST with 503 until it is configured. |
+| `WEBHOOK_SECRET` | Shared secret the Dograh webhook node sends to `/api/webhooks/dograh` in the `x-webhook-secret` header (name matched case-insensitively). Compared in constant time; a wrong or missing secret — on either side — fails closed with 401. |
 | `FIREBASE_SERVICE_ACCOUNT` | Firebase service account JSON — single-line or base64-encoded |
 
 | `APP_AUTH_TOKEN` | *Optional.* Shared secret to protect write APIs (leave empty to keep APIs open) |
@@ -113,24 +113,32 @@ carries a signature only Telnyx's private key can produce):
 node scripts/simulate-telnyx-call.mjs
 ```
 
-### Webhook contract (verified against Dograh source)
+### Webhook contract
 
-- The body is a **user-authored template** in the webhook node — Dograh's
-  renderer **stringifies every value**, so nested dicts arrive as JSON-encoded
-  strings and numbers as strings. Callflow's parser (`src/lib/dograh.ts`)
-  accepts both forms.
-- Delivery is durable and **retried up to 5×** with backoff, then
-  dead-lettered. Each retry regenerates `X-Dograh-Delivery-Id` while the run id
-  stays stable, so Callflow dedupes on both (`dograhRunId` /
-  `dograhDeliveryId`, backed by partial unique indexes in `migrations/schema.sql`).
-- The webhook node supports **custom headers** → auth rides on
-  `X-Callflow-Secret`; `Authorization: Bearer` and `?key=` also work.
-- Telephony runs carry `caller_number` / `called_number` / `direction` in
-  `initial_context`; outcomes in `gathered_context` (`call_disposition`, plus
-  the platform-normalized `mapped_call_disposition`).
-- `recording_url` / `transcript_url` are Dograh public-download links (302 to
-  signed storage URLs). The transcript is a JSON file; Callflow flattens it to
-  `Caller:` / `Agent:` lines and stores it in `calls.transcript`.
+- **Endpoint**: `POST /api/webhooks/dograh` — the one call webhook. Auth rides
+  on the `x-webhook-secret` header (name matched case-insensitively) compared
+  against `WEBHOOK_SECRET` in constant time. Wrong or missing secret — on
+  either side — is rejected with **401**.
+- **Body**: user-authored JSON in the webhook node. Required: `callId`.
+  Optional: `status`, `duration`, `gathered.context.customer_name`, plus
+  `caller_number` / `called_number` (used to link the call to its business).
+  Everything else is ignored. Dograh's renderer **stringifies every value**, so
+  nested dicts can arrive as JSON-encoded strings and numbers as strings — the
+  parser (`src/lib/dograh.ts`) accepts both, plus the previous template's key
+  aliases (`call_id`, `workflow_run_id`, `duration_seconds`,
+  `gathered_context.customer_name`).
+- **Validation**: bad JSON or a body without `callId` → **400**.
+- **Persistence**: the call is upserted into the `calls` table — the same
+  `callId` twice **updates** the existing row and never creates a duplicate
+  (`callId` is stored in `dograhRunId`, guarded by a partial unique index in
+  `migrations/schema.sql`). The exact payload is archived in
+  `calls.rawPayload`.
+- **Response**: `200 {"ok":true}` immediately. The owner push notification is
+  scheduled with `after()` and runs after the response is sent (new calls
+  only — replays never re-notify). Logging is one line per request: method,
+  callId, status code; the secret, headers and body are never logged.
+- **Probes**: `GET /api/webhooks/dograh/health` → `200 {"ok":true}` with no
+  secret; `GET /api/webhooks/dograh` itself answers **405** (POST-only).
 
 ### Dograh workflow configuration
 
@@ -138,63 +146,54 @@ In the workflow's end-of-call **send webhook** node set:
 
 - **URL**: `https://<your-host>/api/webhooks/dograh`
 - **Method**: `POST`
-- **Custom headers**: `X-Webhook-Secret: <DOGRAH_WEBHOOK_SECRET>` (or the legacy `X-Callflow-Secret`) and `Content-Type: application/json`
-- **Body** — paste as-is (every key is optional; the parser falls back to the
-  nested contexts):
+- **Custom headers**: `x-webhook-secret: <WEBHOOK_SECRET>` (the same value as
+  the server's `.env`/`.env.local`) and `Content-Type: application/json`
+- **Body** — paste as-is (`callId` is the one required key):
 
 ```json
 {
-  "workflow_run_id": "{{workflow_run_id}}",
-  "workflow_name": "{{workflow_name}}",
-  "call_time": "{{call_time}}",
-  "direction": "{{initial_context.direction}}",
+  "callId": "{{workflow_run_id}}",
+  "status": "{{gathered_context.call_status}}",
+  "duration": "{{cost_info.call_duration_seconds}}",
   "caller_number": "{{initial_context.caller_number}}",
   "called_number": "{{initial_context.called_number}}",
-  "call_disposition": "{{gathered_context.call_disposition}}",
-  "mapped_call_disposition": "{{gathered_context.mapped_call_disposition}}",
-  "duration_seconds": "{{cost_info.call_duration_seconds}}",
-  "recording_url": "{{recording_url}}",
-  "transcript_url": "{{transcript_url}}",
-  "customer_name": "{{gathered_context.customer_name}}",
-  "calendar_event_id": "{{gathered_context.calendar_event_id}}",
-  "service_requested": "{{gathered_context.service_requested}}",
-  "urgency": "{{gathered_context.urgency}}",
-  "preferred_callback_time": "{{gathered_context.preferred_callback_time}}",
-  "initial_context": "{{initial_context}}",
-  "gathered_context": "{{gathered_context}}"
+  "gathered": "{{gathered_context}}",
+  "initial_context": "{{initial_context}}"
 }
 ```
 
-The last three keys feed the MVP **caller details** shown on the dashboard
-(service requested, urgency, preferred callback time). Add matching variables
-in the Dograh workflow so `gathered_context` actually contains
-`service_requested` / `urgency` / `preferred_callback_time` — when they are
-absent the fields stay empty and the dashboard says "Not captured" instead of
-guessing.
+The renderer stringifies `gathered_context` / `initial_context` into
+JSON-encoded strings; the parser reads `customer_name` out of
+`gathered.context` (falling back to `gathered_context.customer_name` and a
+flat `customer_name`), so the customer name reaches the dashboard as long as
+the workflow actually gathered it — otherwise it stays empty and the dashboard
+says "Not captured" instead of guessing. `status` values outside
+`answered | missed | busy | failed | voicemail_left` are stored as `answered`
+(an end-of-call delivery means the agent spoke). An older template that sends
+`workflow_run_id` / `duration_seconds` keeps working through the key aliases.
 
 ### Caller details + follow-up workflow (MVP)
 
 The dashboard (`/app`) and the full call log (`/calls`) show every call with
 its captured details, transcript/recording, and an owner follow-up workflow:
 
-- **Capture** — caller name/number, service requested, urgency, and preferred
-  callback time come from the Dograh webhook (above). Missing details are
-  labeled "Not captured"; failed/missed calls say so explicitly.
+- **Capture** — caller name/number, status, duration, and the customer name
+  come from the Dograh webhook (above); the exact payload is archived in
+  `calls.rawPayload`. Missing details are labeled "Not captured"; failed/missed
+  calls say so explicitly.
 - **Follow-up** — flag a call for follow-up, keep notes, and mark it resolved
   via `PATCH /api/calls/<id>` with JSON body
   `{ "followUpStatus": "needed" | "resolved" | "none", "followUpNotes": "…" }`
   (either field optional; notes capped at 2000 chars). Both list pages expose
   filter chips for follow-up state.
 
-### Disposition → outcome mapping
+### Outcome mapping (historical)
 
-| Dograh disposition (case/space/dash-insensitive) | Callflow `outcome` |
-|---|---|
-| `appointment_booked`, `api_booked`, `booking_confirmed` | `booked` |
-| `callback_requested`, `request_callback` | `callback` |
-| `voicemail_detected`, `voicemail_left` | `voicemail` (`callStatus: voicemail_left`) |
-| `answered`, `information_provided`, `transferred`, … | `handled` |
-| anything unknown / future codes | `other` (never rejected) |
+The old `call_disposition` → outcome mapping is gone with the previous
+contract: the webhook stores the delivered `status` (mapped onto
+`answered | missed | busy | failed | voicemail_left`, defaulting to
+`answered`) and leaves `calls.outcome` null, which the dashboard shows as
+"other".
 
 ### Business matching (pilot)
 
@@ -204,28 +203,44 @@ link to the business that owns that number:
 1. exact hit on `businesses.phoneNumber` (normalized E.164) → that business;
 2. no hit and exactly **one** business exists → that business;
 3. otherwise the call is stored with `businessId = NULL` and a warning is
-   logged — nothing is silently dropped, and responses show
-   `matchedBusiness: false`.
+   logged — nothing is silently dropped.
 
 ### Testing without a real call
 
 ```bash
-# Full pipeline (parse → dedupe → match → DB write → push) via fixtures:
-curl -X POST http://localhost:3000/api/webhooks/dograh/test \
-  -H "Content-Type: application/json" -d '{"fixture":"booked"}'
-# fixtures: booked | callback | voicemail | handled | unmatched
+export WEBHOOK_SECRET="<value from .env.local or /srv/callflow/.env>"
 
-# Idempotency proof — run twice, second response has "duplicate": true:
-curl -X POST http://localhost:3000/api/webhooks/dograh/test \
-  -H "Content-Type: application/json" \
-  -d '{"fixture":"booked","workflow_run_id":"replay-1"}'
+# Liveness — no secret needed:
+curl http://localhost:3000/api/webhooks/dograh/health            # 200 {"ok":true}
+
+# Good call → 200 {"ok":true} (run twice → still ONE row, fields updated):
+curl -X POST http://localhost:3000/api/webhooks/dograh \
+  -H "Content-Type: application/json" -H "x-webhook-secret: $WEBHOOK_SECRET" \
+  -d '{"callId":"test-probe-1","status":"answered","duration":91,"called_number":"+15550001111","gathered":{"context":{"customer_name":"Jo Caller"}}}'
+
+# Wrong secret → 401 | no secret → 401 | bad JSON → 400 | no callId → 400
+curl -X POST http://localhost:3000/api/webhooks/dograh \
+  -H "Content-Type: application/json" -H "x-webhook-secret: wrong" \
+  -d '{"callId":"test-probe-2"}'                                 # 401
+curl -X POST http://localhost:3000/api/webhooks/dograh \
+  -H "Content-Type: application/json" -d '{"callId":"test-probe-2"}'  # 401
+curl -X POST http://localhost:3000/api/webhooks/dograh \
+  -H "Content-Type: application/json" -H "x-webhook-secret: $WEBHOOK_SECRET" \
+  -d 'not-json'                                                  # 400
+curl -X POST http://localhost:3000/api/webhooks/dograh \
+  -H "Content-Type: application/json" -H "x-webhook-secret: $WEBHOOK_SECRET" \
+  -d '{"status":"answered"}'                                     # 400
+
+# GET on the webhook → 405 (POST-only; use /health for liveness):
+curl -o /dev/null -w '%{http_code}\n' http://localhost:3000/api/webhooks/dograh
+
+# Verify persistence (one row per callId) — then clean up the probe rows:
+node scripts/last-calls.cjs   # direct SQLite read, no auth needed
+npm run clear-test            # removes only rows whose callId starts with "test-"
 ```
 
-The response echoes `callId`, `matchedBusiness`, `outcome`, `transcriptStored`
-and the `push` result (e.g. `{"sent":false,"error":"No FCM token configured"}`)
-— verify persistence with `GET /api/calls`. `npm test` covers the same paths
-against a real temp SQLite (`src/lib/dograh.test.ts`,
-`src/lib/dograh-webhook.test.ts`).
+`npm test` covers the same paths against a real temp SQLite
+(`src/lib/dograh.test.ts`, `src/lib/dograh-webhook.test.ts`).
 
 
 ## Dashboard (`/app`)
@@ -317,8 +332,8 @@ npm run test:build   # production build
 | `/api/contacts/[id]/activity` | GET | Per-contact activity log |
 | `/api/settings` | GET/POST | Settings (reply template, FCM token) |
 | `/api/calls` | GET | Call log (`?status=&since=&outcome=`) |
-| `/api/webhooks/dograh` | POST | Dograh end-of-call webhook (auth via `DOGRAH_WEBHOOK_SECRET`) |
-| `/api/webhooks/dograh/test` | POST | Fire the full webhook pipeline with a fixture payload (auth via `APP_AUTH_TOKEN`) |
+| `/api/webhooks/dograh` | POST | Dograh end-of-call webhook — upsert on `callId`, owner push after the response (auth: `x-webhook-secret` header vs `WEBHOOK_SECRET`; GET → 405) |
+| `/api/webhooks/dograh/health` | GET | Webhook liveness probe (no secret) |
 | `/api/webhooks/dodo` | POST | Dodo Payments webhook — signature-verified writer of `subscriptionStatus` |
 | `/api/billing/signup` | POST | Create Dodo customer + hosted Checkout Session for the Solo plan |
 | `/api/billing/portal` | POST | Open the Dodo customer portal (update card / cancel) |
@@ -534,8 +549,7 @@ env-var needs and is kept for reference.
 | `DATABASE_PATH` | **Required on Render.** Absolute path on the persistent disk mount (see below). Render sets `RENDER=1`, which arms the guard: if the value is omitted, relative, or inside the project directory, the app **refuses to open the database** and every DB route returns 500 with an explanatory error — no silent data loss. |
 | `CORS_ORIGINS` | Comma-separated list of your own origins, e.g. `https://callflow.biz,https://www.callflow.biz`. **Unset means `*`** (any site may call the API). Origins must match exactly, no trailing slash; the app's own pages are same-origin so need no entry. Limits browser JS from other sites only — it is not a substitute for auth. |
 | `APP_AUTH_TOKEN` | Leave **unset** at launch — setting it breaks dashboard writes until the client-side token gap is fixed. See [Auth](#auth). |
-| `PLIVO_AUTH_ID` / `PLIVO_AUTH_TOKEN` | Plivo credentials (Phase 3+) |
-| `PLIVO_NUMBER` | The Plivo number that receives forwarded missed calls |
+| `PLIVO_*` | Legacy — Plivo is not in use (the live provider is Telnyx); kept for old code, harmless if unset |
 | `FIREBASE_SERVICE_ACCOUNT` | Firebase service account JSON (single-line or base64) |
 | `PUBLIC_BASE_URL` | Not read by any code yet — set it for future webhook use (Phases 3–4); harmless today |
 
@@ -621,8 +635,8 @@ project, since that directory is replaced on every deploy).
 ### Copy-paste env values for the first deploy
 
 Only these two are needed to run the site. Everything else is optional and fails
-soft when absent (Plivo and Firebase are checked lazily and only affect calls and
-push notifications, never boot):
+soft when absent (Firebase is checked lazily and only affects push notifications,
+never boot; Plivo is legacy and not in use):
 
 ```
 DATABASE_PATH=/var/data/callflow.db
@@ -671,7 +685,7 @@ live data in three files, so a snapshot must cover all of them, and copying only
 
 The pages a payment provider's merchant review looks for live in the
 `(marketing)` route group and are **fully static** — no client JS, no auth, and
-no environment variables, so they build and serve even before Plivo / Dograh /
+no environment variables, so they build and serve even before Telnyx / Dograh /
 Firebase / Dodo secrets exist:
 
 | Route | File |
@@ -702,7 +716,9 @@ Remove any existing `AAAA` records for `@` and `www` (Render's IPv6 addresses ar
 not usable as CNAME targets), leave TTL on auto/default, and let Render finish
 issuing the certificate before pointing `PUBLIC_BASE_URL` at the domain.
 
-### Plivo / Dograh webhooks
+### Webhooks (Telnyx + Dograh)
 
-After deploy, point the Plivo answer webhook and the Dograh end-of-call webhook at
-`https://<your-app-on-render>.onrender.com/...` (exact routes are wired in Phases 3–4; `PUBLIC_BASE_URL` must match).
+After deploy, point the Telnyx answer webhook (`/api/v1/telephony/telnyx/answer`)
+and the Dograh end-of-call webhook (`/api/webhooks/dograh`, template + curl tests
+above) at `https://<your-app-on-render>.onrender.com/...` (`PUBLIC_BASE_URL` must
+match). Plivo is legacy and not wired to anything live.

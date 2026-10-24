@@ -1,94 +1,55 @@
+import { after } from "next/server";
 import { NextResponse } from "next/server";
-import { dograhWebhookSecret } from "@/lib/dograh";
-import { handleDograhWebhook } from "@/lib/dograh-webhook";
+import { deliverOwnerPush, handleDograhWebhook } from "@/lib/dograh-webhook";
 
 /**
  * Receives Dograh workflow "send webhook" deliveries at end of call.
  *
  * Configure in the Dograh workflow editor:
- *   URL:     https://<your-host>/api/webhooks/dograh?key=<DOGRAH_WEBHOOK_SECRET>
+ *   URL:     https://<your-host>/api/webhooks/dograh
  *   Method:  POST
- *   Headers: X-Webhook-Secret: <DOGRAH_WEBHOOK_SECRET> (or X-Callflow-Secret)
- *   Body:    the Callflow payload template (see README "Dograh webhook").
+ *   Header:  x-webhook-secret: <WEBHOOK_SECRET from .env>
+ *   Body:    JSON with callId (required) — see README "Webhook contract".
  *
- * Responses: 200 = stored/duplicate (stop retries), 4xx = permanent failure
- * (Dograh dead-letters after its retry budget — check the template/config),
- * 503 = DOGRAH_WEBHOOK_SECRET unset on this server in production (all POSTs
- * rejected until configured), other 5xx = unexpected, safe to retry.
+ * Responses: 200 {"ok":true} = stored/updated (stop retries); 401 = wrong or
+ * missing secret; 400 = bad JSON or no callId. The owner push notification is
+ * scheduled with after() so it runs after the response is sent and can never
+ * delay it. Logging is one line per request — method, callId, status code —
+ * and never includes the secret, headers, or body.
  */
 
-let warnedOnce = false;
-function warnIfSecretUnconfigured() {
-  if (
-    !warnedOnce &&
-    process.env.NODE_ENV === "production" &&
-    !dograhWebhookSecret()
-  ) {
-    warnedOnce = true;
-    console.warn(
-      "[dograh-webhook] DOGRAH_WEBHOOK_SECRET is UNSET in production — this " +
-        "endpoint is rejecting every POST with 503 (fail closed). Set it in " +
-        "/srv/callflow/.env and restart to accept Dograh traffic."
-    );
-  }
-}
-
 export async function POST(request: Request) {
-  console.log("🚨 [DOGRAH WEBHOOK HIT] Received request at:", new Date().toISOString());
-  warnIfSecretUnconfigured();
-  let body: unknown;
+  let body: unknown = null;
+  let jsonInvalid = false;
   try {
     body = await request.json();
   } catch {
-    console.warn("🚨 [DOGRAH PAYLOAD]: request body was not valid JSON — rejecting with 400");
-    return NextResponse.json(
-      { error: "request body must be valid JSON" },
-      { status: 400 }
-    );
+    jsonInvalid = true;
   }
-  // Parsed above, so this must sit after the parse — body doesn't exist before it.
-  console.log("🚨 [DOGRAH PAYLOAD]:", JSON.stringify(body, null, 2));
 
-  // Debug visibility for the auth gate (isDograhRequestAuthorized): log WHICH
-  // secret placements Dograh actually sent — never the values themselves.
-  console.log(
-    "🚨 [DOGRAH AUTH] server secret configured:",
-    Boolean(dograhWebhookSecret()),
-    "| placements seen → x-webhook-secret:",
-    Boolean(request.headers.get("x-webhook-secret")),
-    "| x-callflow-secret:",
-    Boolean(request.headers.get("x-callflow-secret")),
-    "| authorization:",
-    Boolean(request.headers.get("authorization")),
-    "| ?key param:",
-    new URL(request.url).searchParams.has("key")
-  );
-
+  let status = 500;
+  let callId: string | undefined;
   try {
     const result = await handleDograhWebhook({
       body,
       headers: request.headers,
-      searchParams: new URL(request.url).searchParams,
+      jsonInvalid,
     });
-    // Surface every handler verdict (200 stored/duplicate, 400 bad payload,
-    // 401 unauthorized, 503 secret unset) in pm2 logs instead of silence.
-    console.log("🚨 [DOGRAH RESULT]: status", result.status, JSON.stringify(result.body));
+    status = result.status;
+    callId = result.callId;
+    if (result.pushPlan) {
+      const plan = result.pushPlan;
+      // Push runs after the response is flushed — the caller gets {"ok":true} fast.
+      after(() => deliverOwnerPush(plan));
+    }
     return NextResponse.json(result.body, { status: result.status });
   } catch (error) {
-    console.error("Webhook Error:", error);
+    console.error("[dograh-webhook] handler failed:", error);
     return NextResponse.json(
       { error: "internal error processing webhook" },
       { status: 500 }
     );
+  } finally {
+    console.log(`[dograh-webhook] POST callId=${callId ?? "-"} -> ${status}`);
   }
 }
-
-/** Liveness probe so the URL can be verified in the Dograh editor. */
-export async function GET() {
-  return NextResponse.json({
-    ok: true,
-    endpoint: "dograh-webhook",
-    secretConfigured: Boolean(dograhWebhookSecret()),
-  });
-}
-

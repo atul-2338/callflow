@@ -33,10 +33,10 @@ describe("dbPathPolicyError", () => {
     expect(error).toContain("DATABASE_PATH must be set in production");
   });
 
-  it("flags a relative DATABASE_PATH on an ephemeral production host", () => {
+  it("flags a relative DATABASE_PATH when the resolved path is not absolute", () => {
     const error = dbPathPolicyError({
       configuredPath: "data/callflow.db",
-      resolvedPath: path.join(PROJECT_DIR, "data", "callflow.db"),
+      resolvedPath: "data/callflow.db",
       nodeEnv: "production",
       projectDir: PROJECT_DIR,
       requirePersistent: EPHEMERAL,
@@ -124,6 +124,26 @@ describe("requiresPersistentDbPath", () => {
   });
 });
 
+describe("getDbPath", () => {
+  it("resolves a relative DATABASE_PATH to an absolute path against the project cwd", () => {
+    vi.stubEnv("DATABASE_PATH", "data/relative-check.db");
+    const resolved = getDbPath();
+    expect(path.isAbsolute(resolved)).toBe(true);
+    expect(resolved).toBe(path.resolve(process.cwd(), "data/relative-check.db"));
+  });
+
+  it("leaves an absolute DATABASE_PATH untouched", () => {
+    vi.stubEnv("DATABASE_PATH", MOUNTED);
+    expect(getDbPath()).toBe(MOUNTED);
+  });
+
+  it("falls back to the absolute in-repo default when unset", () => {
+    delete process.env.DATABASE_PATH;
+    expect(path.isAbsolute(getDbPath())).toBe(true);
+    expect(getDbPath()).toBe(path.join(process.cwd(), "data", "callflow.db"));
+  });
+});
+
 describe("assertPersistentDbPath", () => {
   it("throws on the first DB access when an ephemeral deploy would lose data", () => {
     vi.stubEnv("NODE_ENV", "production");
@@ -141,13 +161,25 @@ describe("assertPersistentDbPath", () => {
     expect(() => assertPersistentDbPath(getDbPath())).not.toThrow();
   });
 
+  it("resolves a relative DATABASE_PATH to inside the project and hard-fails on an ephemeral host", () => {
+    // Runtime shape: getDbPath() resolves a relative DATABASE_PATH against the
+    // project cwd, so the guard receives an absolute path that still sits in
+    // the ephemeral app directory and must reject it for that reason.
+    vi.stubEnv("NODE_ENV", "production");
+    vi.stubEnv("RENDER", "true");
+    process.env.DATABASE_PATH = "data/callflow.db";
+    expect(() => assertPersistentDbPath(getDbPath())).toThrow(
+      /\[database\] DATABASE_PATH must live outside the app directory/
+    );
+  });
+
   it("uses the default path in a production run on a local machine", () => {
     vi.stubEnv("NODE_ENV", "production");
     delete process.env.DATABASE_PATH;
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     expect(() => assertPersistentDbPath(getDbPath())).not.toThrow();
     expect(warn).toHaveBeenCalledWith(
-      expect.stringContaining("the DATABASE_PATH guard is off")
+      expect.stringContaining("DATABASE_PATH is not set")
     );
   });
 
@@ -160,12 +192,12 @@ describe("assertPersistentDbPath", () => {
     );
   });
 
-  it("warns but does not throw when the local default is used in development", () => {
+  it("stays silent in development when DATABASE_PATH is unset", () => {
     vi.stubEnv("NODE_ENV", "development");
     delete process.env.DATABASE_PATH;
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
-    assertPersistentDbPath(getDbPath());
-    expect(warn).toHaveBeenCalledWith(expect.stringContaining("DATABASE_PATH is not set"));
+    expect(() => assertPersistentDbPath(getDbPath())).not.toThrow();
+    expect(warn).not.toHaveBeenCalled();
   });
 
   it("stays quiet when DATABASE_PATH is explicitly configured", () => {

@@ -1,57 +1,67 @@
-// Live verification of the Dograh webhook through the ngrok tunnel.
-// Uses the real DOGRAH_WEBHOOK_SECRET and a throwaway DB (DATABASE_PATH set by the server script).
+// Live verification of the Dograh webhook through the Cloudflare quick tunnel
+// (or against localhost when no tunnel is running).
+//
+// Uses the real WEBHOOK_SECRET from .env.local. Base URL comes from
+// data/tunnel-url.txt (written by scripts/tunnel.mjs), or BASE_URL env.
+//
+// Checks, in order:
+//   1. GET  /api/webhooks/dograh/health -> 200 {"ok":true} (no secret)
+//   2. GET  /api/webhooks/dograh        -> 405 (POST-only)
+//   3. POST with x-webhook-secret       -> 200 {"ok":true}
+//   4. Replay of the same callId        -> 200, still ONE row (idempotent upsert)
+//   5. Wrong secret                     -> 401
+//   6. Missing secret                   -> 401
+//   7. GET /api/calls                   -> rows visible
+// Cleanup afterwards: npm run clear-test (removes callId "test-*" rows).
 import fs from "node:fs";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 
-const BASE = "https://expanse-grunge-glass.ngrok-free.dev";
+let BASE = process.env.BASE_URL ?? "";
+if (!BASE) {
+  try {
+    const tunnelUrl = fs
+      .readFileSync(path.resolve("data/tunnel-url.txt"), "utf8")
+      .trim();
+    BASE = new URL(tunnelUrl).origin;
+  } catch {
+    BASE = "http://localhost:3000";
+  }
+}
 
-// --- Load the real DOGRAH_WEBHOOK_SECRET from .env.local. ---
-const env = fs.readFileSync(path.resolve("f:/callflow/.env.local"), "utf8");
+// --- Load the real WEBHOOK_SECRET from .env.local. ---
+const env = fs.readFileSync(path.resolve(".env.local"), "utf8");
 function envValue(name) {
   const value = env.match(new RegExp(`^${name}=(.*)$`, "m"))?.[1]?.trim();
-  return value ? value.replace(/^"(.*)"$/, "$1") : "";
+  return value ? value.replace(/^"(.*)"/, "$1") : "";
 }
-const secret = envValue("DOGRAH_WEBHOOK_SECRET");
+const secret = envValue("WEBHOOK_SECRET");
 if (!secret) {
-  console.error("DOGRAH_WEBHOOK_SECRET must be set in .env.local");
+  console.error("WEBHOOK_SECRET must be set in .env.local");
   process.exit(1);
 }
 
-// --- Build a fixture payload shaped exactly like the Dograh webhook node sends. ---
-function buildFixture(runId, callerNumber, calledNumber) {
-  const gathered = {
-    call_disposition: "callback_requested",
-    mapped_call_disposition: "callback_requested",
-    caller_number: callerNumber,
-    customer_name: "Priya Raman",
-  };
+// Fixture shaped exactly like the wired Dograh webhook node renders it
+// (template in scripts/wire-dograh-webhook.mjs: every value is stringified,
+// nested contexts arrive as JSON strings). called_number is the live Telnyx
+// DID — the only number in use.
+const TELNYX_DID = "+18885459969";
+function buildFixture(callId) {
   return {
-    payload: {
-      workflow_run_id: runId,
-      workflow_name: "Callflow pilot agent",
-      call_time: new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString(),
+    callId,
+    status: "callback_requested",
+    duration: "184",
+    caller_number: "+15550000123",
+    called_number: TELNYX_DID,
+    gathered: JSON.stringify({
+      customer_name: "Priya Raman",
+      call_status: "end_call",
+    }),
+    initial_context: JSON.stringify({
       direction: "inbound",
-      caller_number: callerNumber,
-      called_number: calledNumber,
-      call_disposition: "callback_requested",
-      mapped_call_disposition: "callback_requested",
-      duration_seconds: "184",
-      recording_url: `https://app.dograh.com/public/download/workflow/${runId}/recording`,
-      transcript_url: `https://app.dograh.com/public/download/workflow/${runId}/transcript`,
-      initial_context: JSON.stringify({
-        direction: "inbound",
-        caller_number: callerNumber,
-        called_number: calledNumber,
-      }),
-      gathered_context: JSON.stringify(gathered),
-      cost_info: JSON.stringify({ call_duration_seconds: "184" }),
-    },
-    headers: {
-      "x-dograh-delivery-id": randomUUID(),
-      "x-dograh-workflow-run-id": runId,
-      "x-dograh-delivery-attempt": "1",
-    },
+      caller_number: "+15550000123",
+      called_number: TELNYX_DID,
+    }),
   };
 }
 
@@ -69,38 +79,35 @@ async function post(path, body, headers = {}) {
     body: JSON.stringify(body),
   });
   const text = await res.text();
-  console.log(`POST ${path} -> ${res.status} ${text.slice(0, 500)}`);
+  console.log(`POST ${path} -> ${res.status} ${text.slice(0, 300)}`);
   return { status: res.status, text };
 }
 
-// 1. Liveness probe through the tunnel.
+const runId = Date.now();
+
+// 1. Liveness — no secret needed.
+await get("/api/webhooks/dograh/health");
+
+// 2. GET on the webhook itself — POST-only, expect 405.
 await get("/api/webhooks/dograh");
 
-// 2. Full pipeline via the fixture test route (parse -> dedupe -> match -> DB write -> push).
-await post("/api/webhooks/dograh/test", { fixture: "booked", workflow_run_id: "tunnel-live-1" });
+// 3. The REAL path: signed POST exactly as the Dograh webhook node sends it.
+const callId = `test-tunnel-live-${runId}`;
+const fixture = buildFixture(callId);
+await post("/api/webhooks/dograh", fixture, { "x-webhook-secret": secret });
 
-// 3. The REAL endpoint path: signed payload with X-Callflow-Secret header,
-//    exactly as the Dograh workflow's send-webhook node will send it.
-const fixture = buildFixture("tunnel-live-2", "+15550000123", "+15559998888");
-await post("/api/webhooks/dograh", fixture.payload, {
-  "x-callflow-secret": secret,
-  ...fixture.headers,
+// 4. Replay the same callId -> idempotent upsert (200, still ONE row).
+await post("/api/webhooks/dograh", fixture, { "x-webhook-secret": secret });
+
+// 5. Wrong secret -> 401.
+await post("/api/webhooks/dograh", buildFixture(`test-tunnel-badauth-${runId}`), {
+  "x-webhook-secret": "wrong-secret",
 });
 
-// 4. Replay the same run id -> must be a duplicate (idempotency through the tunnel).
-await post("/api/webhooks/dograh", fixture.payload, {
-  "x-callflow-secret": secret,
-  "x-dograh-delivery-id": randomUUID(),
-  "x-dograh-workflow-run-id": fixture.headers["x-dograh-workflow-run-id"],
-  "x-dograh-delivery-attempt": "2",
-});
+// 6. Missing secret -> 401.
+await post("/api/webhooks/dograh", buildFixture(`test-tunnel-noauth-${runId}`), {});
 
-// 5. Wrong secret -> must be rejected (401).
-await post("/api/webhooks/dograh", fixture.payload, {
-  "x-callflow-secret": "wrong-secret",
-  "x-dograh-delivery-id": randomUUID(),
-  "x-dograh-workflow-run-id": "bad-auth-run",
-});
-
-// 6. Confirm the calls landed in the throwaway DB via the API.
+// 7. Confirm the calls landed (the tunnel-live row; the 401s must not exist).
 await get("/api/calls");
+
+console.log(`\nCleanup: npm run clear-test  (removes callId "test-*" rows)`);

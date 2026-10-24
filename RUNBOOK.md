@@ -15,7 +15,7 @@ This runbook covers the launch path for:
 - SQLite database stored on a persistent disk
 - Nginx reverse proxy
 - Dograh webhook ingestion
-- Plivo call forwarding
+- Telnyx call answering (Plivo is legacy and not in use)
 - Firebase Cloud Messaging push notifications
 - backup + rollback
 
@@ -26,7 +26,7 @@ Before launch, the app must be fully configured and verified for:
 - service startup
 - reverse proxy + TLS
 - live webhook verification
-- real Plivo call validation
+- real Telnyx call validation
 - FCM device registration
 
 ---
@@ -41,7 +41,7 @@ You need:
 - DNS set for the production domain
 - the production domain name, for example `callflow.biz`
 - access to the GitHub repo or deployment target
-- valid Plivo credentials
+- Telnyx credentials (TELNYX_PUBLIC_KEY, TELNYX_API_KEY, TELNYX_FORWARD_TO)
 - Dograh webhook secret
 - Firebase service account credentials if push is enabled
 
@@ -105,10 +105,10 @@ Set the values required by the app, for example:
 ```bash
 DATABASE_PATH=/var/data/callflow.db
 CORS_ORIGINS=https://your-domain.com,https://www.your-domain.com
-PLIVO_AUTH_ID=...
-PLIVO_AUTH_TOKEN=...
-PLIVO_NUMBER=+1...
-DOGRAH_WEBHOOK_SECRET=...
+TELNYX_PUBLIC_KEY=...
+TELNYX_API_KEY=...
+TELNYX_FORWARD_TO=+1...
+WEBHOOK_SECRET=...
 FIREBASE_SERVICE_ACCOUNT={...}
 APP_AUTH_TOKEN=...
 ```
@@ -116,7 +116,7 @@ APP_AUTH_TOKEN=...
 Notes:
 
 - `DATABASE_PATH` must point to a persistent disk
-- `DOGRAH_WEBHOOK_SECRET` must match the secret configured in the Dograh workflow webhook node
+- `WEBHOOK_SECRET` must match the secret configured in the Dograh workflow webhook node (sent in the `x-webhook-secret` header)
 - if `APP_AUTH_TOKEN` is unset, write APIs remain open by design
 - if you want FCM push notifications enabled, configure Firebase properly and store a valid device token
 
@@ -233,19 +233,25 @@ To enable push for missed calls:
 4. trigger a webhook fixture or a real missed call
 5. confirm the call creates a push notification result
 
-Test the flow with the live fixture endpoint:
+Test the flow against the real endpoint (no fixture route exists anymore):
 
 ```bash
-curl -sS -X POST http://localhost:3111/api/webhooks/dograh/test \
+curl -sS -X POST http://127.0.0.1:3000/api/webhooks/dograh \
   -H "Content-Type: application/json" \
-  -d '{"fixture":"booked","workflow_run_id":"launch-smoke-1"}'
+  -H "x-webhook-secret: $WEBHOOK_SECRET" \
+  -d '{"callId":"launch-smoke-1","status":"answered","duration":"96","caller_number":"+15550000123","called_number":"+19283319394"}'
 ```
 
 Expected result:
 
-- `webhookStatus: 200`
-- `outcome: "booked"`
-- push result indicates success or a clean “no token configured” message if not configured yet
+- `200 {"ok":true}` (wrong/missing secret = 401; missing callId = 400)
+- the call is upserted into the `calls` table (check with `node scripts/last-calls.cjs`)
+- a push is sent after the response if a valid FCM token is stored, else a
+  clean "no FCM token registered" warning in the logs
+- `journalctl -u callflow` shows the one-line `[dograh-webhook] POST callId=launch-smoke-1 -> 200`
+
+Clean up afterwards with `npm run clear-test` (removes `test-*` rows; rename
+the probe callId to `test-launch-smoke-1` to have it auto-removed).
 
 ---
 
@@ -257,11 +263,10 @@ The real webhook endpoint is:
 POST /api/webhooks/dograh
 ```
 
-Required headers or query auth:
+Required header:
 
-- `X-Callflow-Secret: <DOGRAH_WEBHOOK_SECRET>`
-- `Authorization: Bearer <DOGRAH_WEBHOOK_SECRET>`
-- or `?key=<DOGRAH_WEBHOOK_SECRET>`
+- `x-webhook-secret: <WEBHOOK_SECRET>` — constant-time compared; a wrong or
+  missing secret answers 401 (fail closed)
 
 Verify the endpoint:
 
@@ -274,14 +279,14 @@ Verify the endpoint:
 
 ---
 
-## 11. Validate the Plivo path
+## 11. Validate the Telnyx path
 
-Before a production launch, confirm all Plivo values are valid:
+Before a production launch, confirm all Telnyx values are valid:
 
 ```bash
-PLIVO_AUTH_ID
-PLIVO_AUTH_TOKEN
-PLIVO_NUMBER
+TELNYX_PUBLIC_KEY
+TELNYX_API_KEY
+TELNYX_FORWARD_TO
 ```
 
 Then verify the forwarding flow:
@@ -351,7 +356,7 @@ Proceed to launch only when all of the following are true:
 - auth is working
 - FCM token is working
 - Dograh webhook is accepted and processed
-- Plivo forwarding is validated in a real call
+- Telnyx answering is validated in a real call
 - backup and rollback are ready
 - there are no new test failures
 
@@ -393,7 +398,7 @@ Before launch, check off each item in the smoke-test list and confirm:
 - app is healthy
 - domain is live
 - webhook is verified
-- Plivo is verified
+- Telnyx is verified
 - backup and rollback are ready
 
 Only then should production traffic be enabled.

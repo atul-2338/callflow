@@ -261,13 +261,24 @@ export async function getCalls(): Promise<Call[]> {
 export async function addCall(
   data: Omit<
     Call,
-    "id" | "createdAt" | "updatedAt" | "followUpStatus" | "followUpNotes" | "followUpUpdatedAt"
+    | "id"
+    | "createdAt"
+    | "updatedAt"
+    | "followUpStatus"
+    | "followUpNotes"
+    | "followUpUpdatedAt"
+    | "rawPayload"
   > &
-    Partial<Pick<Call, "followUpStatus" | "followUpNotes" | "followUpUpdatedAt">>
+    Partial<
+      Pick<Call, "followUpStatus" | "followUpNotes" | "followUpUpdatedAt" | "rawPayload">
+    >
 ): Promise<Call> {
   const now = new Date().toISOString();
   const call: Call = {
     ...data,
+    // Raw webhook payloads are attached by upsertDograhCall; rows created
+    // through other paths simply have none.
+    rawPayload: data.rawPayload ?? null,
     // Fresh calls always start with an untouched follow-up workflow.
     followUpStatus: data.followUpStatus ?? "none",
     followUpNotes: data.followUpNotes ?? "",
@@ -288,7 +299,7 @@ export async function addCall(
          textBackSentAt, signalwireCallSid, recordingUrl, transcript,
          dograhRunId, dograhDeliveryId, dograhDisposition, outcome,
          customerName, callbackNumber, calendarEventId, transcriptUrl,
-         serviceRequested, urgency, preferredCallbackTime,
+         serviceRequested, urgency, preferredCallbackTime, rawPayload,
          followUpStatus, followUpNotes, followUpUpdatedAt,
          createdAt, updatedAt
        ) VALUES (
@@ -297,7 +308,7 @@ export async function addCall(
          @textBackSentAt, @signalwireCallSid, @recordingUrl, @transcript,
          @dograhRunId, @dograhDeliveryId, @dograhDisposition, @outcome,
          @customerName, @callbackNumber, @calendarEventId, @transcriptUrl,
-         @serviceRequested, @urgency, @preferredCallbackTime,
+         @serviceRequested, @urgency, @preferredCallbackTime, @rawPayload,
          @followUpStatus, @followUpNotes, @followUpUpdatedAt,
          @createdAt, @updatedAt
        )`
@@ -391,7 +402,7 @@ export async function getCallBySignalwireSid(
   return row ? mapCall(row) : null;
 }
 
-/** Dograh webhook idempotency lookups (backed by partial unique indexes). */
+/** Dograh webhook idempotency lookup (backed by the partial unique index). */
 export async function getCallByDograhRunId(runId: string): Promise<Call | null> {
   if (!runId) return null;
   const row = getDb()
@@ -400,14 +411,105 @@ export async function getCallByDograhRunId(runId: string): Promise<Call | null> 
   return row ? mapCall(row) : null;
 }
 
-export async function getCallByDograhDeliveryId(
-  deliveryId: string
-): Promise<Call | null> {
-  if (!deliveryId) return null;
-  const row = getDb()
-    .prepare("SELECT * FROM calls WHERE dograhDeliveryId = ?")
-    .get(deliveryId) as CallRow | undefined;
-  return row ? mapCall(row) : null;
+export interface UpsertDograhCallInput {
+  /** Dograh's callId — stored in dograhRunId, the upsert key. */
+  callId: string;
+  businessId: string | null;
+  callerNumber: string;
+  businessNumber: string;
+  callStatus: CallStatus;
+  durationSeconds: number | null;
+  customerName: string | null;
+  callbackNumber: string | null;
+  rawPayload: string;
+}
+
+/**
+ * Idempotent Dograh webhook write: callId is stored in dograhRunId, which the
+ * partial unique index idx_calls_dograh_run guards — so a redelivered callId
+ * UPDATEs the existing row and a duplicate row can never be inserted, even by
+ * concurrent deliveries (a lost UNIQUE race is retried as an update).
+ */
+export async function upsertDograhCall(
+  input: UpsertDograhCallInput
+): Promise<{ id: string; created: boolean }> {
+  const db = getDb();
+  const now = new Date().toISOString();
+  const findByCallId = db.prepare("SELECT id FROM calls WHERE dograhRunId = ?");
+  const update = db.prepare(
+    `UPDATE calls SET
+       businessId = @businessId, callerNumber = @callerNumber,
+       businessNumber = @businessNumber, callStatus = @callStatus,
+       durationSeconds = @durationSeconds, customerName = @customerName,
+       callbackNumber = @callbackNumber, rawPayload = @rawPayload,
+       updatedAt = @updatedAt
+     WHERE id = @id`
+  );
+  const applyUpdate = (rowId: string): { id: string; created: boolean } => {
+    update.run({
+      id: rowId,
+      businessId: input.businessId,
+      callerNumber: input.callerNumber,
+      businessNumber: input.businessNumber,
+      callStatus: input.callStatus,
+      durationSeconds: input.durationSeconds,
+      customerName: input.customerName,
+      callbackNumber: input.callbackNumber,
+      rawPayload: input.rawPayload,
+      updatedAt: now,
+    });
+    return { id: rowId, created: false };
+  };
+
+  const existing = findByCallId.get(input.callId) as { id: string } | undefined;
+  if (existing) return applyUpdate(existing.id);
+
+  const id = randomUUID();
+  try {
+    db.prepare(
+      `INSERT INTO calls (
+         id, businessId, callerNumber, businessNumber, callStatus,
+         callStartedAt, callEndedAt, durationSeconds, textBackSent,
+         dograhRunId, outcome, customerName, callbackNumber, rawPayload,
+         followUpStatus, followUpNotes, createdAt, updatedAt
+       ) VALUES (
+         @id, @businessId, @callerNumber, @businessNumber, @callStatus,
+         @callStartedAt, @callEndedAt, @durationSeconds, 0,
+         @callId, NULL, @customerName, @callbackNumber, @rawPayload,
+         'none', '', @createdAt, @createdAt
+       )`
+    ).run({
+      id,
+      callId: input.callId,
+      businessId: input.businessId,
+      callerNumber: input.callerNumber,
+      businessNumber: input.businessNumber,
+      callStatus: input.callStatus,
+      callStartedAt: now,
+      callEndedAt: now,
+      durationSeconds: input.durationSeconds,
+      customerName: input.customerName,
+      callbackNumber: input.callbackNumber,
+      rawPayload: input.rawPayload,
+      createdAt: now,
+    });
+    return { id, created: true };
+  } catch (err) {
+    // Concurrent duplicate delivery won the race — update its row instead.
+    if (!isUniqueConstraintError(err)) throw err;
+    const raced = findByCallId.get(input.callId) as { id: string } | undefined;
+    if (!raced) throw err;
+    return applyUpdate(raced.id);
+  }
+}
+
+function isUniqueConstraintError(err: unknown): boolean {
+  return (
+    typeof err === "object" &&
+    err !== null &&
+    typeof (err as { code?: unknown }).code === "string" &&
+    (err as { code: string }).code.startsWith("SQLITE_CONSTRAINT_UNIQUE")
+  );
 }
 
 export async function getCallsByStatus(

@@ -95,7 +95,7 @@ beforeAll(async () => {
   process.env.TELNYX_PUBLIC_KEY = PUBLIC_KEY_HEX;
   process.env.TELNYX_API_KEY = "test-api-key";
   process.env.TELNYX_FORWARD_TO = AGENT_NUMBER;
-  delete process.env.DOGRAH_WEBHOOK_SECRET;
+  delete process.env.WEBHOOK_SECRET;
 
   ({ POST } = await import("@/app/api/v1/telephony/telnyx/answer/route"));
 

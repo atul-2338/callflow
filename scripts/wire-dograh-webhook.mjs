@@ -32,15 +32,15 @@ if (!apiKey || !workflowId) {
   process.exit(1);
 }
 
-// --- Load the real DOGRAH_WEBHOOK_SECRET and tunnel URL from .env.local. ---
+// --- Load the real WEBHOOK_SECRET and tunnel URL from .env.local. ---
 const env = fs.readFileSync(path.resolve("f:/callflow/.env.local"), "utf8");
 function envValue(name) {
   const value = env.match(new RegExp(`^${name}=(.*)$`, "m"))?.[1]?.trim();
   return value ? value.replace(/^"(.*)"$/, "$1") : "";
 }
-const secret = envValue("DOGRAH_WEBHOOK_SECRET");
+const secret = envValue("WEBHOOK_SECRET");
 if (!secret) {
-  console.error("DOGRAH_WEBHOOK_SECRET must be set in .env.local");
+  console.error("WEBHOOK_SECRET must be set in .env.local");
   process.exit(1);
 }
 const returnUrl = envValue("DODO_PAYMENTS_RETURN_URL");
@@ -49,21 +49,13 @@ const endpointUrl = `https://${tunnelHost}/api/webhooks/dograh`;
 
 // --- The Callflow payload template (README "Dograh workflow configuration"). ---
 const payloadTemplate = {
-  workflow_run_id: "{{workflow_run_id}}",
-  workflow_name: "{{workflow_name}}",
-  call_time: "{{call_time}}",
-  direction: "{{initial_context.direction}}",
+  callId: "{{workflow_run_id}}",
+  status: "{{gathered_context.call_status}}",
+  duration: "{{cost_info.call_duration_seconds}}",
   caller_number: "{{initial_context.caller_number}}",
   called_number: "{{initial_context.called_number}}",
-  call_disposition: "{{gathered_context.call_disposition}}",
-  mapped_call_disposition: "{{gathered_context.mapped_call_disposition}}",
-  duration_seconds: "{{cost_info.call_duration_seconds}}",
-  recording_url: "{{recording_url}}",
-  transcript_url: "{{transcript_url}}",
-  customer_name: "{{gathered_context.customer_name}}",
-  calendar_event_id: "{{gathered_context.calendar_event_id}}",
+  gathered: "{{gathered_context}}",
   initial_context: "{{initial_context}}",
-  gathered_context: "{{gathered_context}}",
 };
 
 const NODE_ID = "webhook-callflow";
@@ -117,7 +109,7 @@ const webhookNode = {
     endpoint_url: endpointUrl,
     credential_uuid: null,
     custom_headers: [
-      { key: "X-Callflow-Secret", value: secret },
+      { key: "x-webhook-secret", value: secret },
       { key: "Content-Type", value: "application/json" },
     ],
     payload_template: payloadTemplate,
@@ -140,4 +132,4 @@ console.log(`published: ${JSON.stringify(published).slice(0, 300)}`);
 
 console.log("\nDONE — Dograh webhook node now POSTs to:");
 console.log(`  ${endpointUrl}`);
-console.log("with header X-Callflow-Secret and the Callflow payload template.");
+console.log("with header x-webhook-secret and the Callflow payload template.");

@@ -1,11 +1,10 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import {
-  extractDograhEvent,
-  flattenTranscript,
-  isDograhRequestAuthorized,
-  mapDispositionToOutcome,
+  parseDograhWebhookBody,
+  readHeaderSafe,
+  secretsMatch,
+  webhookSecret,
 } from "./dograh";
-import { buildDograhFixture } from "./dograh-fixtures";
 
 function headerMap(entries: Record<string, string>) {
   return {
@@ -13,273 +12,163 @@ function headerMap(entries: Record<string, string>) {
   };
 }
 
-describe("extractDograhEvent — stringified template payloads", () => {
-  it("parses the recommended top-level template", () => {
-    const { payload, headers } = buildDograhFixture("booked");
-    const event = extractDograhEvent(payload, headerMap(headers))!;
-    expect(event).toMatchObject({
-      outcome: "booked",
-      callStatus: "answered",
-      callerNumber: "+15550000123",
-      calledNumber: "+15559998888",
-      durationSeconds: 184,
-      customerName: "Priya Raman",
-      calendarEventId: "evt_fixture_9f2c",
-      direction: "inbound",
-    });
-    expect(event.endedAt).not.toBeNull();
-    expect(Date.parse(event.endedAt!) - Date.parse(event.startedAt)).toBe(184_000);
+/** A header bag whose get() matches names EXACTLY (case-sensitive) — models
+ * raw Node header records and naive mocks that skip Fetch's normalization. */
+function strictHeaderMap(entries: Record<string, string>) {
+  return {
+    get: (name: string) =>
+      Object.prototype.hasOwnProperty.call(entries, name) ? entries[name] : null,
+  };
+}
+
+describe("readHeaderSafe — header-name casing", () => {
+  it("finds lowercase and title-case spellings on a case-sensitive reader", () => {
+    expect(
+      readHeaderSafe(strictHeaderMap({ "X-Webhook-Secret": "s3cret" }), "x-webhook-secret")
+    ).toBe("s3cret");
+    expect(
+      readHeaderSafe(strictHeaderMap({ "x-webhook-secret": "s3cret" }), "x-webhook-secret")
+    ).toBe("s3cret");
+    expect(readHeaderSafe(strictHeaderMap({}), "x-webhook-secret")).toBe("");
   });
 
-  it("reads stringified nested contexts with no top-level keys", () => {
-    const event = extractDograhEvent({
-      initial_context:
-        '{"direction":"inbound","caller_number":"+15551112222","called_number":"+15553334444"}',
-      gathered_context: '{"call_disposition":"callback_requested","customer_name":"Jo"}',
+  it("works with the real Fetch Headers class in any casing", () => {
+    const headers = new Headers({ "X-Webhook-Secret": "s3cret" });
+    expect(headers.get("x-webhook-secret")).toBe("s3cret"); // spec: name normalized
+    expect(readHeaderSafe(headers, "x-webhook-secret")).toBe("s3cret");
+  });
+
+  it("collapses comma-joined duplicate values from Fetch Headers", () => {
+    const headers = new Headers();
+    headers.append("x-webhook-secret", "s3cret");
+    headers.append("x-webhook-secret", "other");
+    expect(headers.get("x-webhook-secret")).toBe("s3cret, other");
+    expect(readHeaderSafe(headers, "x-webhook-secret")).toBe("s3cret");
+  });
+
+  it("tries names in order and survives a reader whose get() throws", () => {
+    expect(
+      readHeaderSafe(headerMap({ "x-fallback": "v" }), "x-missing", "x-fallback")
+    ).toBe("v");
+    const hostile = {
+      get: () => {
+        throw new Error("boom");
+      },
+    };
+    expect(readHeaderSafe(hostile, "x-webhook-secret")).toBe("");
+  });
+});
+
+describe("webhookSecret + secretsMatch", () => {
+  const ORIGINAL = process.env.WEBHOOK_SECRET;
+  afterEach(() => {
+    if (ORIGINAL === undefined) delete process.env.WEBHOOK_SECRET;
+    else process.env.WEBHOOK_SECRET = ORIGINAL;
+  });
+
+  it("reads WEBHOOK_SECRET from the environment (unquoting)", () => {
+    process.env.WEBHOOK_SECRET = '  "s3cret"  ';
+    expect(webhookSecret()).toBe("s3cret");
+    delete process.env.WEBHOOK_SECRET;
+    expect(webhookSecret()).toBe("");
+  });
+
+  it("accepts the exact secret and rejects anything else, in constant time", () => {
+    expect(secretsMatch("s3cret", "s3cret")).toBe(true);
+    expect(secretsMatch("s3creT", "s3cret")).toBe(false); // case-sensitive
+    expect(secretsMatch("", "s3cret")).toBe(false);
+    expect(secretsMatch("s3cret", "")).toBe(false);
+    expect(secretsMatch("a", "a much longer secret")).toBe(false); // safe across lengths
+  });
+});
+
+describe("parseDograhWebhookBody — POST /api/webhooks/dograh contract", () => {
+  it("parses callId, status, duration and gathered.context.customer_name", () => {
+    const payload = parseDograhWebhookBody({
+      callId: "c-1",
+      status: "completed",
+      duration: 184,
+      gathered: { context: { customer_name: "Priya Raman" } },
+      caller_number: "+15550000123",
+      called_number: "+15550001111",
+    });
+    expect(payload).toEqual({
+      callId: "c-1",
+      status: "completed",
+      durationSeconds: 184,
+      customerName: "Priya Raman",
+      callerNumber: "+15550000123",
+      calledNumber: "+15550001111",
+    });
+  });
+
+  it("accepts Dograh's stringified template values (nested dict as JSON string)", () => {
+    const payload = parseDograhWebhookBody({
+      callId: "700924",
+      duration: "91",
+      gathered: JSON.stringify({ context: { customer_name: "Jo Caller" } }),
+      initial_context: JSON.stringify({
+        caller_number: "+12137771234",
+        called_number: "+12137771235",
+      }),
+    });
+    expect(payload).toMatchObject({
+      callId: "700924",
+      durationSeconds: 91,
+      customerName: "Jo Caller",
+      callerNumber: "+12137771234",
+      calledNumber: "+12137771235",
+    });
+    expect(payload!.status).toBe("");
+  });
+
+  it("accepts the previous template aliases (call_id / workflow_run_id / duration_seconds / gathered_context)", () => {
+    const payload = parseDograhWebhookBody({
       workflow_run_id: "4217",
-    })!;
-    expect(event).toMatchObject({
-      runId: "4217",
-      callerNumber: "+15551112222",
-      calledNumber: "+15553334444",
-      outcome: "callback",
+      duration_seconds: "184",
+      gathered_context: JSON.stringify({ customer_name: "Jo" }),
+      call_id: "4217b",
+    });
+    expect(payload).toMatchObject({
+      callId: "4217b", // call_id ranks above workflow_run_id
+      durationSeconds: 184,
       customerName: "Jo",
     });
   });
 
-  it("falls back to Dograh delivery headers", () => {
-    const event = extractDograhEvent(
-      { caller_number: "+15551112222" },
-      headerMap({
-        "x-dograh-delivery-id": "del-9",
-        "x-dograh-workflow-run-id": "run-9",
-      })
-    )!;
-    expect(event.deliveryId).toBe("del-9");
-    expect(event.runId).toBe("run-9");
-    expect(event.outcome).toBe("other");
-  });
-
-  it("rejects payloads with neither a caller nor a run id", () => {
-    expect(extractDograhEvent({ junk: "value" })).toBeNull();
-  });
-
-  it("treats naive isoformat timestamps as UTC", () => {
-    const event = extractDograhEvent({
-      caller_number: "+15551112222",
-      call_time: "2026-09-15T10:00:00",
-    })!;
-    expect(event.startedAt).toBe("2026-09-15T10:00:00.000Z");
-  });
-});
-
-describe("disposition → outcome mapping", () => {
-  it.each([
-    ["appointment_booked", "booked"],
-    ["API-Booked", "booked"],
-    ["callback requested", "callback"],
-    ["voicemail_detected", "voicemail"],
-    ["information_provided", "handled"],
-    ["some_new_dograh_code", "other"],
-    ["", "other"],
-  ])("maps %s to %s", (disposition, outcome) => {
-    expect(mapDispositionToOutcome(disposition)).toBe(outcome);
-  });
-
-  it("maps voicemail dispositions to the voicemail_left call status", () => {
-    const event = extractDograhEvent({
-      caller_number: "+15551112222",
-      mapped_call_disposition: "voicemail_detected",
-    })!;
-    expect(event.callStatus).toBe("voicemail_left");
-  });
-
-  it("maps zero-duration no_answer to missed", () => {
-    const event = extractDograhEvent({
-      caller_number: "+15551112222",
-      call_disposition: "no_answer",
-      duration_seconds: "0",
-    })!;
-    expect(event.callStatus).toBe("missed");
-  });
-});
-
-describe("flattenTranscript", () => {
-  it("renders turn arrays as Caller/Agent lines", () => {
-    const raw = JSON.stringify([
-      { speaker: "user", text: "Hi, do you take new patients?" },
-      { speaker: "bot", text: "Yes! When works for you?" },
-    ]);
-    expect(flattenTranscript(raw)).toBe(
-      "Caller: Hi, do you take new patients?\nAgent: Yes! When works for you?"
-    );
-  });
-
-  it("handles {transcript:[{role,content}]} shapes", () => {
-    const raw = JSON.stringify({ transcript: [{ role: "assistant", content: "Hello" }] });
-    expect(flattenTranscript(raw)).toBe("Agent: Hello");
-  });
-
-  it("keeps plain text and broken JSON as-is", () => {
-    expect(flattenTranscript("left a message")).toBe("left a message");
-    expect(flattenTranscript('{"broken": ')).toBe('{"broken":');
-    expect(flattenTranscript(null)).toBeNull();
-  });
-
-});
-
-describe("isDograhRequestAuthorized", () => {
-  const emptyQuery = new URLSearchParams();
-
-  it("is open when DOGRAH_WEBHOOK_SECRET is unset", () => {
-    // Vitest loads .env.local into process.env, so "unset" must be forced —
-    // a developer machine with DOGRAH_WEBHOOK_SECRET configured locally would
-    // otherwise fail this test for the wrong reason.
-    vi.stubEnv("DOGRAH_WEBHOOK_SECRET", "");
-    try {
-      expect(isDograhRequestAuthorized(headerMap({}), emptyQuery)).toBe(true);
-    } finally {
-      vi.unstubAllEnvs();
-    }
-  });
-
-  it("accepts the custom header, bearer auth and ?key= fallbacks", () => {
-    process.env.DOGRAH_WEBHOOK_SECRET = "s3cret";
-    try {
-      expect(
-        isDograhRequestAuthorized(headerMap({ "x-callflow-secret": "s3cret" }), emptyQuery)
-      ).toBe(true);
-      expect(
-        isDograhRequestAuthorized(
-          headerMap({ authorization: "Bearer s3cret" }),
-          emptyQuery
-        )
-      ).toBe(true);
-      expect(
-        isDograhRequestAuthorized(headerMap({}), new URLSearchParams("key=s3cret"))
-      ).toBe(true);
-      expect(
-        isDograhRequestAuthorized(headerMap({ "x-webhook-secret": "s3cret" }), emptyQuery)
-      ).toBe(true);
-    } finally {
-      delete process.env.DOGRAH_WEBHOOK_SECRET;
-    }
-  });
-
-  it("rejects wrong or missing secrets", () => {
-    process.env.DOGRAH_WEBHOOK_SECRET = "s3cret";
-    try {
-      expect(
-        isDograhRequestAuthorized(headerMap({ "x-callflow-secret": "wrong" }), emptyQuery)
-      ).toBe(false);
-      expect(isDograhRequestAuthorized(headerMap({}), emptyQuery)).toBe(false);
-      expect(
-        isDograhRequestAuthorized(headerMap({ "x-webhook-secret": "wrong" }), emptyQuery)
-      ).toBe(false);
-    } finally {
-      delete process.env.DOGRAH_WEBHOOK_SECRET;
-    }
-  });
-});
-
-describe("extractDograhEvent — MVP job details", () => {
-  it("captures service, urgency and callback preference from gathered context", () => {
-    const event = extractDograhEvent({
-      caller_number: "+15551112222",
-      workflow_run_id: "details-1",
-      gathered_context: JSON.stringify({
-        call_disposition: "callback_requested",
-        service_requested: "Water heater leak",
-        urgency: "urgent",
-        preferred_callback_time: "after 2pm",
-      }),
-    })!;
-    expect(event.serviceRequested).toBe("Water heater leak");
-    expect(event.urgency).toBe("urgent");
-    expect(event.preferredCallbackTime).toBe("after 2pm");
-  });
-
-  it("accepts the alternate template key names", () => {
-    const event = extractDograhEvent({
-      caller_number: "+15551112222",
-      workflow_run_id: "details-1b",
-      service_requested: "Broken outlet",
-      urgency: "sparks",
-    })!;
-    expect(event.serviceRequested).toBe("Broken outlet");
-    expect(event.urgency).toBe("sparks");
-  });
-
-  it("leaves every detail null when the workflow did not capture it", () => {
-    const event = extractDograhEvent({
-      caller_number: "+15551112222",
-      workflow_run_id: "details-2",
-    })!;
-    expect(event.serviceRequested).toBeNull();
-    expect(event.urgency).toBeNull();
-    expect(event.preferredCallbackTime).toBeNull();
-  });
-
-  it("caps oversized detail values at 200 characters", () => {
-    const event = extractDograhEvent({
-      caller_number: "+15551112222",
-      workflow_run_id: "details-3",
-      service_requested: "x".repeat(500),
-    })!;
-    expect(event.serviceRequested!.length).toBe(200);
-  });
-
-  it("the callback fixture carries the MVP details end-to-end", () => {
-    const { payload } = buildDograhFixture("callback");
-    const event = extractDograhEvent(payload)!;
-    expect(event.serviceRequested).toContain("Water heater");
-    expect(event.urgency).toBeTruthy();
-    expect(event.preferredCallbackTime).toBeTruthy();
-  });
-
-  it("the booked fixture keeps details null (template does not gather them)", () => {
-    const { payload } = buildDograhFixture("booked");
-    const event = extractDograhEvent(payload)!;
-    expect(event.serviceRequested).toBeNull();
-  });
-
-  it("parses the minimal webhook contract keys (call_id / caller_name / reason)", () => {
-    const event = extractDograhEvent({
-      call_id: "731013",
-      workflow_id: "11658",
-      caller_number: "+15551234567",
-      caller_name: "Alex",
-      callback_number: "",
-      reason: "Burst main pipe causing water leakage in kitchen",
-      urgency: "emergency",
-      duration: "78",
-      recording_url: "https://rec.example/731013",
-      transcript_url: "https://tr.example/731013",
-    })!;
-    expect(event).toMatchObject({
-      runId: "731013",
-      customerName: "Alex",
-      callbackNumber: null, // empty string here; fallback happens at storage time
-      serviceRequested: "Burst main pipe causing water leakage in kitchen",
-      urgency: "emergency",
-      durationSeconds: 78,
-      recordingUrl: "https://rec.example/731013",
-      transcriptUrl: "https://tr.example/731013",
+  it("reads customer_name from the documented gathered.context path first", () => {
+    const payload = parseDograhWebhookBody({
+      callId: "c-2",
+      gathered: { context: { customer_name: "From Gathered" } },
+      gathered_context: { customer_name: "From Legacy" },
+      customer_name: "Flat",
     });
+    expect(payload!.customerName).toBe("From Gathered");
   });
 
-  it("canonicalizes the four urgency levels in any casing, keeps others verbatim", () => {
-    const upper = extractDograhEvent({
-      caller_number: "+15551112222",
-      workflow_run_id: "urg-1",
-      urgency: "EMERGENCY",
-    })!;
-    expect(upper.urgency).toBe("emergency");
-    const freeText = extractDograhEvent({
-      caller_number: "+15551112222",
-      workflow_run_id: "urg-2",
-      urgency: "Urgent — water spreading",
-    })!;
-    expect(freeText.urgency).toBe("Urgent — water spreading");
+  it("returns null for non-object bodies and payloads without callId", () => {
+    expect(parseDograhWebhookBody("not-an-object")).toBeNull();
+    expect(parseDograhWebhookBody(null)).toBeNull();
+    expect(parseDograhWebhookBody([1, 2])).toBeNull();
+    expect(parseDograhWebhookBody({ junk: true })).toBeNull();
+    expect(parseDograhWebhookBody({ callId: "   " })).toBeNull();
+  });
+
+  it("ignores extra fields", () => {
+    const payload = parseDograhWebhookBody({
+      callId: "c-3",
+      status: "answered",
+      unrelated: { deeply: ["nested", "junk"] },
+      transcript_url: "https://example.com",
+      cost_info: "123",
+    });
+    expect(payload).toEqual({
+      callId: "c-3",
+      status: "answered",
+      durationSeconds: null,
+      customerName: null,
+      callerNumber: "",
+      calledNumber: "",
+    });
   });
 });

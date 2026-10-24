@@ -116,6 +116,10 @@ export interface Call {
   followUpUpdatedAt: string | null;
   /** Public Dograh URL for the call transcript JSON file. */
   transcriptUrl: string | null;
+  /** Exact webhook payload as delivered (JSON string) — kept beside the
+   * parsed row for debugging and replay. Null for rows created outside the
+   * Dograh webhook. */
+  rawPayload: string | null;
   createdAt: string;
   updatedAt: string;
 }
