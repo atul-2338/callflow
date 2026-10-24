@@ -49,10 +49,11 @@ systemctl restart "$APP_NAME"
 sleep 4
 
 # Health gate: /pricing is static and never touches SQLite, so it proves the
-# process is serving. /api/contacts is the DB round-trip that proves the guard
-# is satisfied and the data directory is readable.
+# process is serving. /api/webhooks/dograh/health is the unauthenticated probe
+# that runs a real read-only SQLite query, proving the data directory is
+# readable and the database actually opens (500 on failure).
 HTTP_APP="$(curl -sS -o /dev/null -w '%{http_code}' http://127.0.0.1:3000/pricing || echo 000)"
-HTTP_DB="$(curl -sS -o /dev/null -w '%{http_code}' http://127.0.0.1:3000/api/contacts || echo 000)"
+HTTP_DB="$(curl -sS -o /dev/null -w '%{http_code}' http://127.0.0.1:3000/api/webhooks/dograh/health || echo 000)"
 echo "    /pricing -> ${HTTP_APP}   /api/contacts -> ${HTTP_DB}"
 
 if [[ "$HTTP_APP" != "200" || "$HTTP_DB" != "200" ]]; then
