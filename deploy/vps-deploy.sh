@@ -54,7 +54,7 @@ sleep 4
 # readable and the database actually opens (500 on failure).
 HTTP_APP="$(curl -sS -o /dev/null -w '%{http_code}' http://127.0.0.1:3000/pricing || echo 000)"
 HTTP_DB="$(curl -sS -o /dev/null -w '%{http_code}' http://127.0.0.1:3000/api/webhooks/dograh/health || echo 000)"
-echo "    /pricing -> ${HTTP_APP}   /api/contacts -> ${HTTP_DB}"
+echo "    /pricing -> ${HTTP_APP}   /api/webhooks/dograh/health -> ${HTTP_DB}"
 
 if [[ "$HTTP_APP" != "200" || "$HTTP_DB" != "200" ]]; then
   echo "==> Health check FAILED — rolling back to ${PREV_SHA:0:7}" >&2
