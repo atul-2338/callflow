@@ -32,7 +32,7 @@ if (!apiKey) {
   process.exit(1);
 }
 
-const [cmd, arg] = process.argv.slice(2);
+const [cmd, arg, ...rest] = process.argv.slice(2);
 
 const secret = envValue("WEBHOOK_SECRET");
 const returnUrl = envValue("DODO_PAYMENTS_RETURN_URL");
@@ -99,12 +99,6 @@ case "tools": {
 case "docs": {
     if (!arg) throw new Error("usage: dograh-mcp.mjs docs <query>");
     const text = await callTool("search_docs", { query: arg, limit: 8 });
-    console.log(text);
-    break;
-  }
-  case "read-doc": {
-    if (!arg) throw new Error("usage: dograh-mcp.mjs read-doc <path>");
-    const text = await callTool("read_doc", { path: arg });
     console.log(text);
     break;
   }
@@ -185,6 +179,32 @@ case "node-type": {
     // 4. Save as a draft (published version keeps serving until you publish).
     const saveText = await callTool("save_workflow", { workflow_id: arg, code });
     console.log("save_workflow ->", saveText);
+    break;
+  }
+  case "search-docs": {
+    if (!arg) throw new Error("usage: dograh-mcp.mjs search-docs <query> [limit]");
+    const text = await callTool(
+      "search_docs",
+      { query: arg, limit: rest[0] ? Number(rest[0]) : 6 }
+    );
+    console.log(text);
+    break;
+  }
+  case "read-doc": {
+    if (!arg) throw new Error("usage: dograh-mcp.mjs read-doc <path> [section]");
+    const text = await callTool(
+      "read_doc",
+      rest[0] ? { path: arg, section: rest[0] } : { path: arg }
+    );
+    console.log(text);
+    break;
+  }
+  case "list-docs": {
+    const text = await callTool(
+      "list_docs",
+      arg ? { path: arg, depth: rest[0] ? Number(rest[0]) : 2 } : { depth: 2 }
+    );
+    console.log(text);
     break;
   }
   case "publish": {
