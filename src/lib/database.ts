@@ -293,3 +293,15 @@ export function getDb(): Database.Database {
   db = instance;
   return db;
 }
+
+/**
+ * Close and drop the cached SQLite handle. Used by tests and maintenance
+ * scripts that create a throwaway database via DATABASE_PATH and then need to
+ * delete its file while the process is still running (on Windows an open
+ * handle — or its WAL sidecars — makes rmSync fail with EPERM). Idempotent:
+ * safe to call when nothing is open.
+ */
+export function closeDb(): void {
+  db?.close();
+  db = null;
+}

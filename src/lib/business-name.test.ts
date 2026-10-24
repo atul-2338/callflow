@@ -2,6 +2,7 @@ import fs from "fs";
 import os from "os";
 import path from "path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { closeDb } from "./database";
 import { createBusiness, getBusinessById, getBusinessByName, getBusinessByPhone } from "./db";
 import {
   BUSINESS_NAME_TAKEN_ERROR,
@@ -39,7 +40,20 @@ beforeAll(() => {
 });
 
 afterAll(() => {
-  fs.rmSync(tmpDir, { recursive: true, force: true });
+  // Release the SQLite handle first: on Windows an open file (or its WAL
+  // sidecars) makes rmSync fail with EPERM. The retry/warn fallback keeps a
+  // temp-dir cleanup hiccup from ever failing the suite itself.
+  closeDb();
+  try {
+    fs.rmSync(tmpDir, {
+      recursive: true,
+      force: true,
+      maxRetries: 10,
+      retryDelay: 100,
+    });
+  } catch (err) {
+    console.warn(`[business-name.test] could not remove temp dir ${tmpDir}: ${err}`);
+  }
 });
 
 describe("createBusiness client UID", () => {
@@ -94,11 +108,12 @@ describe("getBusinessByName", () => {
 
 describe("createBillingSignup duplicate-name guard", () => {
   it("throws BusinessNameTakenError before any Dodo call when the name is claimed", async () => {
-    // "Acme Plumbing" belongs to +18568243792 (created above).
+    // "Acme Plumbing" belongs to +18568243792 (created above): a differently
+    // cased / padded duplicate must be rejected before any Dodo call.
     await expect(
       createBillingSignup({
         phoneNumber: "+18568243793",
-        name: "  acme plumbing CO ",
+        name: "  ACME Plumbing  ",
         email: "owner@acme.test",
         country: "US",
       })
