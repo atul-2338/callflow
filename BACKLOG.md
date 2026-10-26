@@ -20,48 +20,39 @@ implemented; Dograh handler untouched. Closed; no longer open.
 *Note: steps 2–7 keep the previous NOW/NEXT/LATER items in MVP priority
 order (inferred) — owner to confirm or correct.*
 
-## NOW (MVP steps 1–7 — one at a time, show result, wait for "next")
+## NOW (MVP — one at a time, show result, wait for "next")
 
-1. **Step 1 — Stack trace (15 min).** Find the error stack trace in the
-   VPS log; report the first line of each distinct error, how often it
-   happens, and whether it affects calls, checkout, or pages. Fix only
-   if it is a small, clear bug. Done when: identified AND fixed or
-   marked harmless.
-   First command: `ssh root@45.76.252.174 "journalctl -u callflow --since '3 days ago' --no-pager | grep -n -i -B2 -A8 error | head -120"`
+1. **Step 2 — Admin panel Phase 6: finish the live test.** Env vars +
+   deploy already shipped (b7737fb, 2026-10-26; `/admin` renders the
+   sign-in form — the fail-closed 404 did not trigger). Remaining:
+   owner live-tests https://callflow.biz/admin — sign-in, overview,
+   create-business roundtrip, logout; optional nginx IP-allow block.
+   First command: open https://callflow.biz/admin in a browser.
 
-2. **Step 2 — Admin panel Phase 6: deploy guide + ship to
-   https://callflow.biz.** Mint ADMIN_PASSWORD_HASH locally; append
-   ADMIN_PASSWORD_HASH + ADMIN_SESSION_SECRET to `/srv/callflow/.env`
-   via ssh stdin (backup → append → `chown callflow:callflow` →
-   `chmod 600`, values never printed); deploy via
-   `.clinerules/workflows/deploy.md` after approval; live-test
-   `/admin/login` sign-in, overview, create-business roundtrip, logout;
-   optional nginx IP-allow block from Phase 5.
-   First command: `npm run admin:hash` (local; hidden prompts, hash only to stdout)
+2. **Step 3 follow-up — Dodo dashboard webhook registration.** Register
+   https://callflow.biz/api/webhooks/dodo in the Dodo dashboard
+   (Developer → Webhooks), subscribe to `subscription.*` and
+   `payment.*` events, then run the checkout smoke test (test product,
+   test_mode).
+   First command: open https://dashboard.dodo.dev → Developer → Webhooks.
 
-3. **Step 3 — Dodo keys on the VPS.** DODO_* env vars are missing from
-   `/srv/callflow/.env`, so billing is inert in production.
-   First command: `ssh root@45.76.252.174 "grep -c '^DODO_' /srv/callflow/.env || true"`
-   (prints a count only), then the ssh stdin-append pattern (backup →
-   append → chown → chmod 600).
-
-4. **Step 4 — Clean 64-char WEBHOOK_SECRET.** Canonical secret is 48
+3. **Step 4 — Clean 64-char WEBHOOK_SECRET.** Canonical secret is 48
    chars (`4b33…`); replace with a clean 64-char value and update the
    Dograh dashboard webhook header to match (mind the cutover order).
    First command: `openssl rand -hex 32` — paste the value straight into the ssh stdin-append; never print it in chat
 
-5. **Step 5 — Firebase push (FCM) setup.** Service-account key + FCM
+4. **Step 5 — Firebase push (FCM) setup.** Service-account key + FCM
    wiring for owner push (webhook currently logs "no FCM token
    registered").
    First command: `ssh root@45.76.252.174 "grep -Ec '^FIREBASE_|^FCM_|^GOOGLE_' /srv/callflow/.env || true"`
    (prints a count only)
 
-6. **Step 6 — Recording + transcript in the dashboard.** Surface the
+5. **Step 6 — Recording + transcript in the dashboard.** Surface the
    recording link and full transcript per call in `/app`.
    First command: `grep -rn "recording" src/app src/lib migrations/schema.sql | head -30`
    (map what already exists before coding)
 
-7. **Step 7 — Scope contacts + settings per business.** Contacts and
+6. **Step 7 — Scope contacts + settings per business.** Contacts and
    settings tables are single-row globals; scope them per business
    (multi-tenant correctness before promoting).
    First command: `grep -n "contacts" migrations/schema.sql`
@@ -69,19 +60,49 @@ order (inferred) — owner to confirm or correct.*
 
 ## NEXT (week-1 — owner to confirm/add)
 
-8. **Key rotation runbook** — documented rotate procedure for
+7. **Key rotation runbook** — documented rotate procedure for
    WEBHOOK_SECRET, BUSINESS_SESSION_SECRET, ADMIN_SESSION_SECRET
    (including the Dograh dashboard cutover order).
-9. *Owner's week-1 list goes here (monitoring, backups, docs, …).*
+8. *Owner's week-1 list goes here (monitoring, backups, docs, …).*
 
 ## LATER (the rest)
 
-10. **Dev-leftover cleanup (inert)** — `watchpack` dev-workaround dep in
+9. **Dev-leftover cleanup (inert)** — `watchpack` dev-workaround dep in
     package.json (inert at runtime); `scripts/wf-*.ts` scratch files
     (never committed per rules).
 
 ## DONE
 
+- **2026-10-26** — **Checkout-401 fix (pre-created businesses):** the
+  /setup flow pre-creates the business row in Step 1, so
+  /api/billing/signup treated it as "existing" and minted no session →
+  /api/billing/confirm returned 401 right after a successful payment.
+  Fixed with a signed checkout-bound handoff cookie (new
+  `src/lib/signup-handoff.ts`: HMAC-SHA256 over BUSINESS_SESSION_SECRET,
+  domain-separated, 30-min expiry): signup sets it only for an existing,
+  not-yet-subscribed business, bound to the fresh checkout session;
+  confirm accepts it only when it still matches the row's stored checkout
+  session (and Dodo's redirect `session_id`), and converts it into a real
+  session only after the webhook has linked a subscription — the phone
+  number alone still grants nothing. 21/21 tests green (new
+  signup-handoff + signup-route + confirm-route suites); lint 0 errors;
+  tsc clean. Not committed/deployed — needs owner approval; then re-run a
+  production trial signup through /setup to verify end-to-end.
+- **2026-10-26** — **Step 3 — Dodo keys on the VPS:** owner ran
+  `bash scripts/dodo-env-setup.sh` (Git Bash only; WSL-shim gotcha
+  documented in the header). Hidden prompts for API key + webhook
+  secret, visible for product ID — values never on screen, in argv, or
+  in chat. Timestamped backup → old `^DODO_` lines wiped → 5 vars
+  appended unquoted with `$`→`\$` (loader-proven) →
+  `callflow:callflow`/600 → restart gated on count==5 → smoke green:
+  service active, /pricing 200, dograh health 200. Script untracked
+  (commit only on owner word). Follow-up tracked as NOW item 2:
+  register https://callflow.biz/api/webhooks/dodo in the Dodo
+  dashboard + checkout smoke test.
+- **2026-10-26** — **Step 1 — Stack-trace audit:** 3-day journalctl
+  sweep, 7 distinct error signatures; only real production impact was
+  the missing DODO_* env (2 failed signups) — fixed by Step 3 above;
+  rest probe noise / one-off ENOENTs, marked harmless, no code changed.
 - **2026-10-26** — MVP session started: BACKLOG rewritten as the 7-step
   priority list (NOW = steps 1–7); derived webhook results on
   /admin/system CONFIRMED by owner (Dograh handler untouched).

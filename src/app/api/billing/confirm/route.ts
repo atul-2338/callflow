@@ -1,5 +1,9 @@
 import { NextResponse } from "next/server";
-import { businessIdFromCookieHeader } from "@/lib/business-session";
+import {
+  businessIdFromCookieHeader,
+  businessSessionCookie,
+  createBusinessSessionToken,
+} from "@/lib/business-session";
 import {
   describeBillingAccess,
   isTrialExpired,
@@ -7,6 +11,11 @@ import {
   trialEndsAt,
 } from "@/lib/billing";
 import { getBusinessById } from "@/lib/db";
+import {
+  clearSignupHandoffCookie,
+  signupHandoffFromCookieHeader,
+  type SignupHandoff,
+} from "@/lib/signup-handoff";
 
 export const runtime = "nodejs";
 
@@ -29,15 +38,65 @@ const lastReconcileAt = new Map<string, number>();
  * anything) while making the wait converge even when Dodo's webhook delivery
  * lags behind the browser redirect.
  */
+/**
+ * Optional `{ checkoutSessionId }` posted by the return page: Dodo's redirect
+ * `session_id`. Absent or malformed bodies simply skip this extra binding
+ * check — the handoff cookie itself is always required and verified.
+ */
+async function readBodyCheckoutSessionId(request: Request): Promise<string | null> {
+  try {
+    const body = (await request.json()) as { checkoutSessionId?: unknown };
+    return typeof body?.checkoutSessionId === "string" && body.checkoutSessionId
+      ? body.checkoutSessionId
+      : null;
+  } catch {
+    return null;
+  }
+}
+
 export async function POST(request: Request) {
-  const businessId = businessIdFromCookieHeader(request.headers.get("cookie"));
+  const cookieHeader = request.headers.get("cookie");
+  const businessId = businessIdFromCookieHeader(cookieHeader);
+
+  // Two authenticated paths:
+  //  1. the full business session cookie (the owner already has a session), or
+  //  2. the checkout-bound signup handoff cookie minted by /api/billing/signup
+  //     for an existing business (a row pre-created by /setup, or a returning
+  //     owner re-running the wizard). It is bound to the exact checkout
+  //     session this server created, so knowing the phone number alone still
+  //     opens nothing — and it becomes a session below only after the webhook
+  //     has linked a subscription.
+  let handoff: SignupHandoff | null = null;
   if (!businessId) {
+    handoff = signupHandoffFromCookieHeader(cookieHeader);
+    if (!handoff) {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
+  }
+
+  // Exactly one of the two proofs is present here.
+  const tokenBusinessId = businessId ?? handoff?.businessId;
+  if (!tokenBusinessId) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  let business = await getBusinessById(businessId);
+  let business = await getBusinessById(tokenBusinessId);
   if (!business) {
     return NextResponse.json({ error: "Billing profile not found" }, { status: 404 });
+  }
+
+  if (handoff) {
+    // The handoff must still name the checkout session currently stored on
+    // the business row (a newer signup overwrites that id and invalidates
+    // older handoffs), and if the browser brought Dodo's redirect
+    // `session_id` along it must agree with the cookie. Anything else is 401.
+    if (handoff.checkoutSessionId !== business.dodoCheckoutSessionId) {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
+    const redirectSessionId = await readBodyCheckoutSessionId(request);
+    if (redirectSessionId && redirectSessionId !== handoff.checkoutSessionId) {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
   }
 
   // Reconcile only while the checkout is genuinely unconfirmed. Once a webhook
@@ -52,15 +111,15 @@ export async function POST(request: Request) {
 
   if (awaitingConfirmation) {
     const now = Date.now();
-    const last = lastReconcileAt.get(businessId) ?? 0;
+    const last = lastReconcileAt.get(tokenBusinessId) ?? 0;
     if (now - last >= RECONCILE_COOLDOWN_MS) {
-      lastReconcileAt.set(businessId, now);
+      lastReconcileAt.set(tokenBusinessId, now);
       business = await reconcileDodoCheckout(business);
     }
   }
 
   const access = describeBillingAccess(business);
-  return NextResponse.json({
+  const response = NextResponse.json({
     businessId: business.id,
     subscriptionStatus: business.subscriptionStatus,
     subscriptionId: business.dodoSubscriptionId,
@@ -71,4 +130,18 @@ export async function POST(request: Request) {
     hasSubscription: !!business.dodoSubscriptionId,
     checkoutSessionId: business.dodoCheckoutSessionId,
   });
+
+  if (handoff && business.dodoSubscriptionId) {
+    // The signature-verified webhook write path has linked a subscription to
+    // the business this handoff was issued for: checkout completion is now
+    // proven, so hand the browser the real session and retire the handoff.
+    const secure =
+      process.env.NODE_ENV === "production" || new URL(request.url).protocol === "https:";
+    response.headers.append(
+      "Set-Cookie",
+      businessSessionCookie(createBusinessSessionToken(business.id), secure)
+    );
+    response.headers.append("Set-Cookie", clearSignupHandoffCookie(secure));
+  }
+  return response;
 }

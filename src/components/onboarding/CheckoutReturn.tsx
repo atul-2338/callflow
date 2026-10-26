@@ -66,14 +66,19 @@ export default function CheckoutReturn() {
   const [attempts, setAttempts] = useState(0);
 
   const check = useCallback(async () => {
+    // Dodo's query params are read inside this client-only callback (never
+    // during render), so server and client markup stay identical. The
+    // redirect's `session_id` also travels in the POST body: it lets the
+    // server bind the checkout-bound signup handoff cookie to the exact
+    // checkout Dodo redirected us back from.
+    const params = new URLSearchParams(window.location.search);
     const response = await fetch("/api/billing/confirm", {
       method: "POST",
       cache: "no-store",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ checkoutSessionId: params.get("session_id") }),
     });
 
-    // Dodo's query params are read after the await: they only inform the copy,
-    // and touching them here keeps server and client markup identical.
-    const params = new URLSearchParams(window.location.search);
     setAttemptedSessionId(params.get("session_id"));
     setAttempts((count) => count + 1);
     const declinedByRedirect = params.get("status") === "failed";

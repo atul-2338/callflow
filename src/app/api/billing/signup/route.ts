@@ -11,17 +11,23 @@ import {
   trialEndsAt,
 } from "@/lib/billing";
 import { clientIp, rateLimit } from "@/lib/rate-limit";
+import { createSignupHandoffToken, signupHandoffCookie } from "@/lib/signup-handoff";
 
 export const runtime = "nodejs";
 
 /**
  * Kick off trial signup and hand the browser a fresh Dodo hosted-checkout URL.
  *
- * The session cookie is set here — for NEWLY CREATED businesses only — so the
- * return page can identify the business and poll `/api/me`. For an existing
- * business the phone number alone does not prove ownership, so no session is
- * minted and the response says so (`sessionIssued: false`); the owner keeps
- * using the session they already have, or completes checkout again.
+ * A full session cookie is set here — for NEWLY CREATED businesses only — so
+ * the return page can identify the business and poll `/api/me`. For an
+ * existing business the phone number alone does not prove ownership, so no
+ * session is minted (`sessionIssued: false`); instead the browser gets a
+ * short-lived checkout-bound handoff cookie that only lets
+ * `/api/billing/confirm` report the trusted billing state for the checkout
+ * session this request just created, and converts into a real session there
+ * only after the signature-verified webhook links the subscription. An
+ * already-subscribed business gets neither — nothing about its session may
+ * depend on knowing the phone number.
  */
 export async function POST(request: Request) {
   // Abuse guard: paid checkouts and Dodo customer records cost money, and the
@@ -80,13 +86,24 @@ export async function POST(request: Request) {
       },
       { status: 201 }
     );
+    const secure =
+      process.env.NODE_ENV === "production" || new URL(request.url).protocol === "https:";
     if (created) {
       response.headers.append(
         "Set-Cookie",
-        businessSessionCookie(
-          createBusinessSessionToken(business.id),
-          process.env.NODE_ENV === "production" || new URL(request.url).protocol === "https:"
-        )
+        businessSessionCookie(createBusinessSessionToken(business.id), secure)
+      );
+    } else if (!alreadySubscribed && checkoutSessionId) {
+      // Existing business (pre-created earlier in /setup, or a returning
+      // owner): the phone number alone still proves nothing, so no session is
+      // minted. Instead hand out a short-lived cookie bound to the exact
+      // checkout session just created; /api/billing/confirm accepts it to
+      // report the trusted billing state and — only once the signature-
+      // verified webhook links a subscription — converts it into a real
+      // session. See src/lib/signup-handoff.ts.
+      response.headers.append(
+        "Set-Cookie",
+        signupHandoffCookie(createSignupHandoffToken(business.id, checkoutSessionId), secure)
       );
     }
     return response;
