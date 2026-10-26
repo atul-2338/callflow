@@ -18,6 +18,7 @@
     "clear-test": "node scripts/clear-test.cjs",
     "link-calls": "node scripts/link-calls.cjs",
     "activate-pilot": "node scripts/activate-pilot.cjs",
+    "admin:hash": "node scripts/admin-hash.mjs",
     "test:browser": "node scripts/browser-test-setup.mjs",
     "test:build": "next build"
   },

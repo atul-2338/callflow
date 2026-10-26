@@ -30,6 +30,20 @@ CREATE TABLE IF NOT EXISTS client_profile (
   createdAt TEXT NOT NULL
 );
 
+-- Admin-panel audit trail (Phase 3): one row per admin action — sign-ins and
+-- sign-outs (security events) plus every admin write (Phase 4 pages). Rows are
+-- appended by logAdminAction() in src/lib/admin-audit.ts. `details` is
+-- caller-built JSON holding the minimum context needed to reconstruct what
+-- changed — never secrets, request headers, or raw request bodies.
+CREATE TABLE IF NOT EXISTS admin_audit_log (
+  id TEXT PRIMARY KEY,
+  action TEXT NOT NULL,
+  target TEXT,
+  details TEXT,
+  ip TEXT NOT NULL DEFAULT '',
+  createdAt TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS activity_logs (
   id TEXT PRIMARY KEY,
   contactId TEXT NOT NULL,
@@ -145,3 +159,4 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_calls_dograh_run ON calls(dograhRunId)
   WHERE dograhRunId IS NOT NULL;
 CREATE UNIQUE INDEX IF NOT EXISTS idx_calls_dograh_delivery ON calls(dograhDeliveryId)
   WHERE dograhDeliveryId IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_admin_audit_created ON admin_audit_log(createdAt);
