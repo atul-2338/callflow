@@ -1,8 +1,8 @@
 /**
  * POST /api/admin/logout — clears the admin session cookie. Guarded like every
- * /api/admin/* route; the client component navigates to /admin/login
- * afterwards either way, so a stale session signing out just sees a 401 and
- * lands on the login page.
+ * /api/admin/* route; the client component navigates to /admin afterwards
+ * either way, so a stale session signing out just sees a 401 and lands on
+ * /admin, which shows the sign-in form.
  */
 import { NextResponse } from "next/server";
 import { logAdminAction } from "@/lib/admin-audit";

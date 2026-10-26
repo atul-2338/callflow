@@ -1,6 +1,8 @@
 /**
- * Phase 5 safety tests for the page-side guard (requireAdminPage), which the
- * admin/(protected) layout calls once for every /admin page.
+ * Safety tests for the page-side guard (requireAdminPage), which the
+ * admin/(protected) layout calls once for every /admin sub-page, and for
+ * adminPageSessionActive(), which the /admin entry page uses to decide
+ * between the sign-in form (signed out) and the overview (signed in).
  *
  * next/headers and next/navigation are faked to their real contract:
  * cookies() hands back raw token VALUES keyed by name, and redirect() /
@@ -39,7 +41,7 @@ vi.mock("next/navigation", () => ({
 
 import { ADMIN_SESSION_COOKIE_NAME, createAdminSessionToken } from "./admin-session";
 import { businessSessionCookieName, createBusinessSessionToken } from "./business-session";
-import { requireAdminPage } from "./admin-page-guard";
+import { adminPageSessionActive, requireAdminPage } from "./admin-page-guard";
 
 const ADMIN_SECRET = "page-guard-test-admin-secret";
 const OWNER_SECRET = "page-guard-test-owner-secret";
@@ -66,12 +68,12 @@ describe("requireAdminPage", () => {
     vi.stubEnv("ADMIN_SESSION_SECRET", ADMIN_SECRET);
   }
 
-  it("redirects to /admin/login when only the owner session cookie is present", async () => {
+  it("redirects to /admin when only the owner session cookie is present", async () => {
     stubAdminConfigured();
     vi.stubEnv("BUSINESS_SESSION_SECRET", OWNER_SECRET);
     // A genuinely valid owner token from the real owner session module.
     setCookie(businessSessionCookieName(), createBusinessSessionToken("biz-owner-1"));
-    await expect(requireAdminPage()).rejects.toThrow("REDIRECT:/admin/login");
+    await expect(requireAdminPage()).rejects.toThrow("REDIRECT:/admin");
   });
 
   it("rejects an owner-format token even if it is placed under the admin cookie name", async () => {
@@ -80,18 +82,18 @@ describe("requireAdminPage", () => {
     setCookie(ADMIN_SESSION_COOKIE_NAME, createBusinessSessionToken("biz-owner-1"));
     // The owner token has 3 dot-separated parts; the admin verifier demands
     // the 5-part admin.v1.<expires>.<nonce>.<hmac> shape, so this fails.
-    await expect(requireAdminPage()).rejects.toThrow("REDIRECT:/admin/login");
+    await expect(requireAdminPage()).rejects.toThrow("REDIRECT:/admin");
   });
 
   it("redirects when no session cookie is present", async () => {
     stubAdminConfigured();
-    await expect(requireAdminPage()).rejects.toThrow("REDIRECT:/admin/login");
+    await expect(requireAdminPage()).rejects.toThrow("REDIRECT:/admin");
   });
 
   it("rejects a forged admin token", async () => {
     stubAdminConfigured();
     setCookie(ADMIN_SESSION_COOKIE_NAME, "admin.v1.99999999999999.somelongnonce.forged");
-    await expect(requireAdminPage()).rejects.toThrow("REDIRECT:/admin/login");
+    await expect(requireAdminPage()).rejects.toThrow("REDIRECT:/admin");
   });
 
   it("lets a valid admin session through without redirecting", async () => {
@@ -108,5 +110,47 @@ describe("requireAdminPage", () => {
     vi.stubEnv("ADMIN_SESSION_SECRET", "");
     setCookie(ADMIN_SESSION_COOKIE_NAME, token);
     await expect(requireAdminPage()).rejects.toThrow("NOT_FOUND");
+  });
+});
+
+describe("adminPageSessionActive", () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    cookieStoreState.present = false;
+    cookieStoreState.name = "";
+    cookieStoreState.value = "";
+  });
+
+  function stubAdminConfigured(): void {
+    vi.stubEnv("ADMIN_PASSWORD_HASH", HASH_PLACEHOLDER);
+    vi.stubEnv("ADMIN_SESSION_SECRET", ADMIN_SECRET);
+  }
+
+  it("reports a valid admin session as active", async () => {
+    stubAdminConfigured();
+    setCookie(ADMIN_SESSION_COOKIE_NAME, createAdminSessionToken());
+    await expect(adminPageSessionActive()).resolves.toBe(true);
+  });
+
+  it("reports a signed-out visitor (no cookie) as inactive", async () => {
+    stubAdminConfigured();
+    await expect(adminPageSessionActive()).resolves.toBe(false);
+  });
+
+  it("reports an owner-format token under the admin cookie name as inactive", async () => {
+    stubAdminConfigured();
+    vi.stubEnv("BUSINESS_SESSION_SECRET", OWNER_SECRET);
+    setCookie(ADMIN_SESSION_COOKIE_NAME, createBusinessSessionToken("biz-owner-1"));
+    await expect(adminPageSessionActive()).resolves.toBe(false);
+  });
+
+  it("notFound()s when the admin env vars are missing, even with a valid token", async () => {
+    // Mint the token while the secret is configured, then fail the env closed.
+    vi.stubEnv("ADMIN_SESSION_SECRET", ADMIN_SECRET);
+    const token = createAdminSessionToken();
+    vi.stubEnv("ADMIN_PASSWORD_HASH", "");
+    vi.stubEnv("ADMIN_SESSION_SECRET", "");
+    setCookie(ADMIN_SESSION_COOKIE_NAME, token);
+    await expect(adminPageSessionActive()).rejects.toThrow("NOT_FOUND");
   });
 });

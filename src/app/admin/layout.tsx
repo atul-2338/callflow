@@ -1,10 +1,12 @@
 import type { Metadata } from "next";
 
 /**
- * Shell for the entire /admin area. No auth here on purpose: the guarded
- * pages live in app/admin/(protected)/, whose layout calls requireAdminPage()
- * for every page in the group, while /admin/login stays outside so it can
- * authenticate. This layout only owns shared metadata — the admin panel must
+ * Shell for the entire /admin area. No auth here on purpose: /admin itself is
+ * the entry page (it shows the sign-in form when signed out and the overview
+ * when signed in), the guarded sub-pages live in app/admin/(protected)/, whose
+ * layout calls requireAdminPage() for every page in the group, and
+ * /admin/login is only a permanent redirect to /admin. This layout only owns
+ * shared metadata — the admin panel must
  * never be indexed (belt alongside src/app/robots.ts).
  */
 export const metadata: Metadata = {

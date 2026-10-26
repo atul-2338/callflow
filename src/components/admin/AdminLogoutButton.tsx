@@ -3,8 +3,9 @@
 import { useState } from "react";
 
 /**
- * Clears the admin session server-side, then hard-navigates to the login page
- * (a full reload, so no client router cache can keep showing guarded content).
+ * Clears the admin session server-side, then hard-navigates to /admin (a full
+ * reload, so no client router cache can keep showing guarded content; /admin
+ * renders the sign-in form once signed out).
  */
 export default function AdminLogoutButton() {
   const [busy, setBusy] = useState(false);
@@ -16,9 +17,9 @@ export default function AdminLogoutButton() {
       await fetch("/api/admin/logout", { method: "POST" });
     } catch {
       // Network trouble: still leave the page — the next guarded request will
-      // bounce to the login page anyway.
+      // bounce to /admin anyway.
     } finally {
-      window.location.assign("/admin/login");
+      window.location.assign("/admin");
     }
   }
 

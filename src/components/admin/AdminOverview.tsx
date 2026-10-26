@@ -9,11 +9,12 @@ import {
 import { formatAdminDateTime } from "@/lib/admin-format";
 
 /**
- * Admin overview (Phase 4). Four live stat cards plus the latest admin
- * activity; every section links deeper into the panel. Auth is enforced by
- * the (protected) group layout, not here.
+ * Admin overview body (Phase 4). Four live stat cards plus the latest admin
+ * activity; every section links deeper into the panel. Rendered by the /admin
+ * entry page for signed-in admins, inside AdminPanelShell — access control
+ * lives in adminPageSessionActive(), not here.
  */
-export default async function AdminOverviewPage() {
+export default async function AdminOverview() {
   const [businesses, calls, unlinked, audit] = await Promise.all([
     adminCountBusinesses(),
     adminCountCalls(),

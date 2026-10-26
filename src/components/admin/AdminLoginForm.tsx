@@ -1,15 +1,16 @@
 "use client";
 
-import { useRouter } from "next/navigation";
 import { useState, type FormEvent } from "react";
 
 /**
- * Password-only admin sign-in. On success the server sets the HttpOnly admin
- * session cookie and we navigate into the guarded area; every failure shows
- * the server's generic message (the login API never distinguishes causes).
+ * Password-only admin sign-in, rendered by the /admin entry page when signed
+ * out. On success the server sets the HttpOnly admin session cookie and we
+ * hard-navigate to /admin (full reload, so no client router cache can keep
+ * showing the sign-in form — the freshly rendered /admin is the overview);
+ * every failure shows the server's generic message (the login API never
+ * distinguishes causes).
  */
 export default function AdminLoginForm() {
-  const router = useRouter();
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
@@ -26,7 +27,11 @@ export default function AdminLoginForm() {
         body: JSON.stringify({ password }),
       });
       if (response.ok) {
-        router.replace("/admin");
+        // window.location.replace, not router.replace: the cookie was set on
+        // the server, so the next request must actually re-fetch /admin from
+        // scratch — and replace() keeps the form out of the back-button
+        // history, matching the old router.replace semantics.
+        window.location.replace("/admin");
         return;
       }
       const data: unknown = await response.json().catch(() => null);
