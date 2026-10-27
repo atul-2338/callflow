@@ -5,6 +5,7 @@ import {
   formatCallTime,
   readSmtpConfig,
   sendCallAlertEmail,
+  sendOperatorAlertEmail,
   smtpConfigError,
   telHref,
   type CallAlertEmailInput,
@@ -179,5 +180,40 @@ describe("sendCallAlertEmail", () => {
     );
     expect(result).toEqual({ sent: false, error: "Invalid login: 535" });
     expect(close).toHaveBeenCalled();
+  });
+});
+describe("sendOperatorAlertEmail", () => {
+  const CONFIG = {
+    host: "smtp.test.local",
+    port: 587,
+    user: "u",
+    pass: "p",
+    from: "Callflow <a@t.local>",
+  };
+
+  it("sends a plain-text alert to the given recipient", async () => {
+    sendMail.mockResolvedValueOnce({ messageId: "<op-1@test.local>" });
+    const result = await sendOperatorAlertEmail(
+      CONFIG,
+      "owner@example.com",
+      "CallFlow: your number is being prepared",
+      "body text"
+    );
+    expect(result).toEqual({ sent: true, messageId: "<op-1@test.local>" });
+    expect(sendMail).toHaveBeenCalledWith(
+      expect.objectContaining({
+        from: "Callflow <a@t.local>",
+        to: "owner@example.com",
+        subject: "CallFlow: your number is being prepared",
+        text: "body text",
+      })
+    );
+    expect(close).toHaveBeenCalled();
+  });
+
+  it("returns the SMTP error instead of throwing", async () => {
+    sendMail.mockRejectedValueOnce(new Error("Connection timeout"));
+    const result = await sendOperatorAlertEmail(CONFIG, "o@e.com", "s", "t");
+    expect(result).toEqual({ sent: false, error: "Connection timeout" });
   });
 });

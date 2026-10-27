@@ -208,6 +208,13 @@ const BUSINESS_ADDED_COLUMNS: ReadonlyArray<readonly [string, string]> = [
   // FIRST by matchDograhBusiness against Dograh's called_number; see
   // migrations/schema.sql and src/lib/dograh-webhook.ts.
   ["assignedNumber", "TEXT"],
+  // Linear /onboarding flow state: '1' (business info) → '2' (your CallFlow
+  // number) → '3' (turn on forwarding) → '4' (verify) → 'done'. NOT NULL with
+  // a default so every pre-existing row lands on step 1 (the dashboard
+  // redirects them into the flow). A business is pending a number exactly
+  // when assignedNumber IS NULL — there is deliberately no separate status
+  // column (see src/lib/numbers-pool.ts).
+  ["onboardingStep", "TEXT NOT NULL DEFAULT '1'"],
 ];
 
 function migrateCallsTable(db: Database.Database): void {

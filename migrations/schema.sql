@@ -94,12 +94,16 @@ CREATE TABLE IF NOT EXISTS businesses (
   -- creation and never rotated (generateClientUid in src/lib/util.ts).
   clientUid TEXT,
   phoneNumber TEXT NOT NULL,
-  -- CallFlow DID bound to this business by an admin (PATCH
-  -- /api/admin/businesses/[id]): the number the caller dials that belongs to
-  -- THIS business. E.164 with leading "+"; NULL = no dedicated number (the
-  -- shared CALLFLOW_FORWARDING_DID serves it). Dograh attribution matches
-  -- called_number against this column FIRST, then falls back to phoneNumber.
+  -- CallFlow DID bound to THIS business from the number pool
+  -- (data/phone_numbers.json, see src/lib/numbers-pool.ts). E.164 with
+  -- leading "+"; NULL = pending_number (no number yet — assign from
+  -- /admin/numbers). Dograh attribution matches called_number against ONLY
+  -- this column; unmatched calls are logged and answered 200 without a row.
   assignedNumber TEXT,
+  -- Linear /onboarding flow state ('1'|'2'|'3'|'4'|'done'). '1' until the
+  -- owner submits business info; the Dograh webhook flips '4' → 'done' on
+  -- the first call attributed to the business (see dograh-webhook.ts).
+  onboardingStep TEXT NOT NULL DEFAULT '1',
   carrier TEXT NOT NULL DEFAULT 'other',
   forwardingStatus TEXT NOT NULL DEFAULT 'not_started',
   lastVerifiedAt TEXT,

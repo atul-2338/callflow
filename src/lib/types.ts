@@ -146,6 +146,11 @@ export const FORWARDING_STATUSES = [
 
 export type ForwardingStatus = (typeof FORWARDING_STATUSES)[number];
 
+/** Linear /onboarding flow states, in order. */
+export const ONBOARDING_STEPS = ["1", "2", "3", "4", "done"] as const;
+
+export type OnboardingStep = (typeof ONBOARDING_STEPS)[number];
+
 export interface Business {
   id: string;
   /**
@@ -157,15 +162,23 @@ export interface Business {
   clientUid: string;
   phoneNumber: string;
   /**
-   * The CallFlow DID bound to this business by an admin (PATCH
-   * /api/admin/businesses/[id]): the number a caller dials that belongs to
-   * THIS business. E.164 with leading "+", or null when the business has no
-   * dedicated number (the shared CALLFLOW_FORWARDING_DID serves it). Dograh
-   * attribution matches called_number against this field FIRST, then falls
-   * back to phoneNumber. Distinct from phoneNumber, which is the OWNER's
-   * destination number their carrier forwards from.
+   * The CallFlow DID bound to this business from the number pool
+   * (data/phone_numbers.json, see src/lib/numbers-pool.ts): the number a
+   * caller dials that belongs to THIS business. E.164 with leading "+", or
+   * null when the business is pending a number (empty pool or released).
+   * Dograh attribution matches called_number against ONLY this field —
+   * unmatched calls are logged and answered 200 without a row. Distinct from
+   * phoneNumber, which is the OWNER's real business number (used for the
+   * forwarding-instruction area-code preference and shown in admin).
    */
   assignedNumber: string | null;
+  /**
+   * Linear /onboarding flow state: '1' (business info) → '2' (your CallFlow
+   * number) → '3' (turn on forwarding) → '4' (verify) → 'done'. The dashboard
+   * redirects to /onboarding until this is 'done'; the Dograh webhook
+   * advances '4' → 'done' on the first attributed call.
+   */
+  onboardingStep: string;
   carrier: Carrier;
   forwardingStatus: ForwardingStatus;
   lastVerifiedAt: string | null;

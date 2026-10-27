@@ -202,3 +202,42 @@ export async function sendCallAlertEmail(
     };
   }
 }
+/**
+ * Plain-text operational alert (e.g. "number pool is empty") over the same
+ * SMTP configuration. NEVER throws — returns `{ sent: false, error }` like
+ * the call alert so callers can log and move on.
+ */
+export async function sendOperatorAlertEmail(
+  config: SmtpConfig,
+  to: string,
+  subject: string,
+  text: string
+): Promise<EmailSendResult> {
+  try {
+    const transporter = nodemailer.createTransport({
+      host: config.host,
+      port: config.port,
+      secure: config.port === 465,
+      auth:
+        config.user && config.pass
+          ? { user: config.user, pass: config.pass }
+          : undefined,
+    });
+    try {
+      const info = await transporter.sendMail({
+        from: config.from,
+        to,
+        subject,
+        text,
+      });
+      return { sent: true, messageId: info?.messageId ?? undefined };
+    } finally {
+      transporter.close();
+    }
+  } catch (err) {
+    return {
+      sent: false,
+      error: err instanceof Error ? err.message : "Email send failed",
+    };
+  }
+}

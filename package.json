@@ -16,6 +16,7 @@
     "last-calls": "node scripts/last-calls.cjs",
     "seed-test": "node scripts/seed-test.cjs",
     "clear-test": "node scripts/clear-test.cjs",
+    "check-numbers": "node scripts/check-numbers.cjs",
     "link-calls": "node scripts/link-calls.cjs",
     "activate-pilot": "node scripts/activate-pilot.cjs",
     "admin:hash": "node scripts/admin-hash.mjs",

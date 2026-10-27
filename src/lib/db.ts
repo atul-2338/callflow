@@ -616,6 +616,7 @@ export async function createBusiness(
     | "smsVerificationExpiresAt"
     | "notificationEmail"
     | "assignedNumber"
+    | "onboardingStep"
   > &
     Partial<
       Pick<
@@ -669,6 +670,7 @@ export async function createBusiness(
     smsVerificationExpiresAt: data.smsVerificationExpiresAt ?? null,
     notificationEmail: data.notificationEmail ?? null,
     assignedNumber: data.assignedNumber ?? null,
+    onboardingStep: "1",
     id: randomUUID(),
     createdAt: now,
     updatedAt: now,
@@ -681,14 +683,14 @@ export async function createBusiness(
          billingEmail, billingCountry, trialStartedAt, dodoCustomerId,
          dodoSubscriptionId, dodoCheckoutSessionId, subscriptionStatus,
          subscriptionPaymentId, smsVerificationCode, smsVerificationExpiresAt,
-         notificationEmail, assignedNumber, createdAt, updatedAt
+         notificationEmail, assignedNumber, onboardingStep, createdAt, updatedAt
        ) VALUES (
          @id, @clientUid, @phoneNumber, @carrier, @forwardingStatus, @lastVerifiedAt,
          @pendingVerificationFor, @pendingVerificationExpiresAt, @billingName,
          @billingEmail, @billingCountry, @trialStartedAt, @dodoCustomerId,
          @dodoSubscriptionId, @dodoCheckoutSessionId, @subscriptionStatus,
          @subscriptionPaymentId, @smsVerificationCode, @smsVerificationExpiresAt,
-         @notificationEmail, @assignedNumber, @createdAt, @updatedAt
+         @notificationEmail, @assignedNumber, @onboardingStep, @createdAt, @updatedAt
        )`
     )
     .run(business);
@@ -711,6 +713,7 @@ export async function updateBusiness(
     .prepare(
       `UPDATE businesses SET
          phoneNumber = @phoneNumber, assignedNumber = @assignedNumber,
+         onboardingStep = @onboardingStep,
          carrier = @carrier,
          forwardingStatus = @forwardingStatus, lastVerifiedAt = @lastVerifiedAt,
          pendingVerificationFor = @pendingVerificationFor,
