@@ -1,4 +1,6 @@
 import { NextResponse } from "next/server";
+import { businessIdFromCookieHeader } from "@/lib/business-session";
+import { getBusinessById } from "@/lib/db";
 import { isValidInternationalPhone, normalizeEnvValue } from "@/lib/util";
 
 // The CallFlow forwarding number (E.164) that business phones forward missed
@@ -6,6 +8,11 @@ import { isValidInternationalPhone, normalizeEnvValue } from "@/lib/util";
 // to the client by GET /api/setup/config (consumed by
 // src/components/onboarding/useForwardingDid.ts) so the UI never hardcodes it:
 // changing the number is a .env change, not a code change.
+//
+// Resolution order: a signed-in owner's business with an admin-assigned
+// CallFlow number (businesses.assignedNumber) is served first — a per-business
+// DID must never be replaced by the shared one; every business without its own
+// assigned number gets the shared CALLFLOW_FORWARDING_DID.
 //
 // It must be the same carrier-facing number as PLIVO_NUMBER / TELNYX_NUMBER
 // (the DID that actually receives forwarded calls) — keep them in sync. It is
@@ -17,7 +24,19 @@ import { isValidInternationalPhone, normalizeEnvValue } from "@/lib/util";
 // state instead of dial codes that would forward calls to a dead DID.
 export const dynamic = "force-dynamic";
 
-export async function GET() {
+export async function GET(request: Request) {
+  // Per-business first: the owner's own DID when one is assigned. Admin-set
+  // values are E.164 at write time; the leading "+" is re-checked here so a
+  // malformed legacy row can never render as carrier dial codes.
+  const businessId = businessIdFromCookieHeader(request.headers.get("cookie"));
+  if (businessId) {
+    const business = await getBusinessById(businessId);
+    const assigned = business?.assignedNumber;
+    if (assigned && assigned.startsWith("+")) {
+      return NextResponse.json({ forwardingDid: assigned });
+    }
+  }
+
   const forwardingDid = getForwardingDid();
 
   if (!forwardingDid) {

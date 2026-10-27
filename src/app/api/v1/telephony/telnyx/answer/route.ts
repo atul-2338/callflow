@@ -26,8 +26,9 @@ export const runtime = "nodejs";
  * The transfer is also the forwarding-confirmation trigger: a call that
  * arrives on the Telnyx number and is accepted for transfer to the agent is
  * live proof that the owner's carrier forwarding works end to end, so the
- * attributed business (Dograh convention: direct match on the dialled number,
- * then the single-business fallback) has its forwardingStatus flipped to
+ * attributed business (matchDograhBusiness: its assignedNumber first, then
+ * the dialled number on phoneNumber, then the single-business fallback) has
+  * its forwardingStatus flipped to
  * "active". A failed transfer answers 500 instead — the status stays
  * "pending" and Telnyx redelivers the event so the transfer can be retried.
  *
@@ -131,8 +132,9 @@ export async function POST(request: Request) {
   });
 
   // Telnyx accepted the transfer — the owner's carrier forwarding demonstrably
-  // works end to end. Attribute the call with the Dograh convention (direct
-  // match on the dialled number, then the single-business fallback) and
+  // works end to end. Attribute the call via matchDograhBusiness (assignedNumber
+  // first, then the dialled number on phoneNumber, then the single-business
+  // fallback) and
   // confirm that specific business's forwarding. An unattributed call (no
   // match and more than one business) flips nothing. If the DB write itself
   // throws, the handler answers 500 and Telnyx's redelivery retries it.

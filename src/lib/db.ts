@@ -615,6 +615,7 @@ export async function createBusiness(
     | "smsVerificationCode"
     | "smsVerificationExpiresAt"
     | "notificationEmail"
+    | "assignedNumber"
   > &
     Partial<
       Pick<
@@ -631,6 +632,7 @@ export async function createBusiness(
         | "smsVerificationCode"
         | "smsVerificationExpiresAt"
         | "notificationEmail"
+        | "assignedNumber"
       >
     >
 ): Promise<Business> {
@@ -666,6 +668,7 @@ export async function createBusiness(
     smsVerificationCode: data.smsVerificationCode ?? null,
     smsVerificationExpiresAt: data.smsVerificationExpiresAt ?? null,
     notificationEmail: data.notificationEmail ?? null,
+    assignedNumber: data.assignedNumber ?? null,
     id: randomUUID(),
     createdAt: now,
     updatedAt: now,
@@ -678,14 +681,14 @@ export async function createBusiness(
          billingEmail, billingCountry, trialStartedAt, dodoCustomerId,
          dodoSubscriptionId, dodoCheckoutSessionId, subscriptionStatus,
          subscriptionPaymentId, smsVerificationCode, smsVerificationExpiresAt,
-         notificationEmail, createdAt, updatedAt
+         notificationEmail, assignedNumber, createdAt, updatedAt
        ) VALUES (
          @id, @clientUid, @phoneNumber, @carrier, @forwardingStatus, @lastVerifiedAt,
          @pendingVerificationFor, @pendingVerificationExpiresAt, @billingName,
          @billingEmail, @billingCountry, @trialStartedAt, @dodoCustomerId,
          @dodoSubscriptionId, @dodoCheckoutSessionId, @subscriptionStatus,
          @subscriptionPaymentId, @smsVerificationCode, @smsVerificationExpiresAt,
-         @notificationEmail, @createdAt, @updatedAt
+         @notificationEmail, @assignedNumber, @createdAt, @updatedAt
        )`
     )
     .run(business);
@@ -707,7 +710,8 @@ export async function updateBusiness(
   getDb()
     .prepare(
       `UPDATE businesses SET
-         phoneNumber = @phoneNumber, carrier = @carrier,
+         phoneNumber = @phoneNumber, assignedNumber = @assignedNumber,
+         carrier = @carrier,
          forwardingStatus = @forwardingStatus, lastVerifiedAt = @lastVerifiedAt,
          pendingVerificationFor = @pendingVerificationFor,
          pendingVerificationExpiresAt = @pendingVerificationExpiresAt,

@@ -94,6 +94,12 @@ CREATE TABLE IF NOT EXISTS businesses (
   -- creation and never rotated (generateClientUid in src/lib/util.ts).
   clientUid TEXT,
   phoneNumber TEXT NOT NULL,
+  -- CallFlow DID bound to this business by an admin (PATCH
+  -- /api/admin/businesses/[id]): the number the caller dials that belongs to
+  -- THIS business. E.164 with leading "+"; NULL = no dedicated number (the
+  -- shared CALLFLOW_FORWARDING_DID serves it). Dograh attribution matches
+  -- called_number against this column FIRST, then falls back to phoneNumber.
+  assignedNumber TEXT,
   carrier TEXT NOT NULL DEFAULT 'other',
   forwardingStatus TEXT NOT NULL DEFAULT 'not_started',
   lastVerifiedAt TEXT,

@@ -14,7 +14,7 @@ import {
   generateSetupInstruction,
   telHref,
 } from "@/lib/forwarding-codes";
-import { useForwardingDid } from "./useForwardingDid";
+import { formatForwardingDid, useForwardingDid } from "./useForwardingDid";
 
 const CARRIERS = [
   { value: "verizon", label: "Verizon" },
@@ -41,7 +41,7 @@ const inputClass = "ios-field";
 interface CarrierForwardingStepProps {
   /** Business row id; the confirm button stays disabled until one exists. */
   businessId: string | null;
-  /** Owner's E.164 number — only used to keep the carrier in sync. */
+  /** Owner's E.164 number — shown on the instruction card and used to keep the carrier in sync. */
   ownerPhoneE164: string | null;
   /** Controlled carrier selection (verizon | tmobile | att | other). */
   carrier: string;
@@ -234,6 +234,16 @@ export default function CarrierForwardingStep({
 
         {forwarding && (
           <p className="mt-3 text-xs text-ink-2">{forwarding.note}</p>
+        )}
+
+        {ownerPhoneE164 && (
+          <p className="mt-3 text-xs text-ink-2">
+            Forwarding from your number{" "}
+            <b className="font-medium text-ink">
+              {formatForwardingDid(ownerPhoneE164)}
+            </b>{" "}
+            — its unanswered calls ring the AI backup above.
+          </p>
         )}
       </div>
 

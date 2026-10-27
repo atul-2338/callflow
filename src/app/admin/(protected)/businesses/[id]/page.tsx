@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 
+import EditBusinessForm from "@/components/admin/EditBusinessForm";
 import StatusPill from "@/components/admin/StatusPill";
 import { adminListRecentCallsForBusiness } from "@/lib/admin-db";
 import { formatAdminDateTime } from "@/lib/admin-format";
@@ -55,6 +56,13 @@ export default async function AdminBusinessDetailPage({ params }: RouteParams) {
             <Detail label="Phone (destination number)">
               <span className="font-mono text-xs">{business.phoneNumber}</span>
             </Detail>
+            <Detail label="Assigned CallFlow number">
+              {business.assignedNumber ? (
+                <span className="font-mono text-xs">{business.assignedNumber}</span>
+              ) : (
+                <span className="text-ink-3">— (shared CallFlow number)</span>
+              )}
+            </Detail>
             <Detail label="Carrier">{business.carrier}</Detail>
             <Detail label="Forwarding status">
               <StatusPill kind="forwarding" value={business.forwardingStatus} />
@@ -98,6 +106,11 @@ export default async function AdminBusinessDetailPage({ params }: RouteParams) {
           </dl>
         </section>
       </div>
+
+      <EditBusinessForm
+        businessId={business.id}
+        currentAssignedNumber={business.assignedNumber}
+      />
 
       <section className="overflow-hidden rounded-2xl bg-white shadow-sm">
         <h2 className="px-5 pt-5 text-sm font-semibold text-ink">

@@ -73,6 +73,22 @@ order (inferred) — owner to confirm or correct.*
 
 ## DONE
 
+- **2026-10-27** — **Per-business assigned CallFlow numbers:** nullable
+  `businesses.assignedNumber` (schema.sql + BUSINESS_ADDED_COLUMNS
+  migration + types.ts + db.ts create/update); admin PATCH
+  `/api/admin/businesses/[id]` (E.164 validation, 409 vs any OTHER
+  business's assignedNumber OR phoneNumber, self re-save allowed, empty
+  value clears, audit-logged `business_assigned_number_set`) +
+  EditBusinessForm + detail-page row; `/api/setup/config` serves the
+  signed-in owner's assigned number first, shared-DID fallback unchanged;
+  CarrierForwardingStep shows the owner's number on the instruction card
+  (variant A). Protected Dograh surface changed with explicit owner
+  approval ONLY in matchDograhBusiness: assignedNumber matched FIRST,
+  then the unchanged phoneNumber match and single-business fallback; the
+  Telnyx answer route inherits via the shared function. Tests: 10
+  PATCH-route, 4 matcher, 3 setup-config, guard-safety covers PATCH.
+  Full suite 317/317; tsc clean; next build green. Not yet
+  committed/deployed — awaiting owner ok.
 - **2026-10-26** — **Checkout-401 fix (pre-created businesses):** the
   /setup flow pre-creates the business row in Step 1, so
   /api/billing/signup treated it as "existing" and minted no session →
@@ -86,8 +102,14 @@ order (inferred) — owner to confirm or correct.*
   session only after the webhook has linked a subscription — the phone
   number alone still grants nothing. 21/21 tests green (new
   signup-handoff + signup-route + confirm-route suites); lint 0 errors;
-  tsc clean. Not committed/deployed — needs owner approval; then re-run a
-  production trial signup through /setup to verify end-to-end.
+  tsc clean. Deployed same day with owner approval: full suite 300/300 +
+  local build green → commit c134b8a pushed → vps-deploy.sh (npm ci,
+  build clean, restart, health gate green). Post-deploy on the VPS:
+  service active at c134b8a; unauthenticated POST /api/billing/confirm
+  still 401 with the byte-identical body; Dograh matrix
+  405/401/401/400/400/200, fresh insert calls 7→8, replay delta 0.
+  Remaining: owner re-runs a production trial signup through /setup to
+  verify end-to-end.
 - **2026-10-26** — **Step 3 — Dodo keys on the VPS:** owner ran
   `bash scripts/dodo-env-setup.sh` (Git Bash only; WSL-shim gotcha
   documented in the header). Hidden prompts for API key + webhook

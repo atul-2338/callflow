@@ -21,6 +21,7 @@ import { businessSessionCookieName, createBusinessSessionToken } from "@/lib/bus
 import { hashAdminPassword } from "@/lib/admin-password";
 import { resetRateLimits } from "@/lib/rate-limit";
 
+import { PATCH as businessesPATCH } from "./businesses/[id]/route";
 import { POST as assignPOST } from "./calls/[id]/assign/route";
 import { POST as businessesPOST } from "./businesses/route";
 import { POST as loginPOST } from "./login/route";
@@ -82,6 +83,13 @@ describe("admin API guard safety (real requireAdminApi)", () => {
   it("401s without a cookie on every guarded route", async () => {
     expect((await businessesPOST(request(BIZ_URL))).status).toBe(401);
     expect(
+      (
+        await businessesPATCH(request(`${BIZ_URL}/some-biz-id`), {
+          params: Promise.resolve({ id: "some-biz-id" }),
+        })
+      ).status
+    ).toBe(401);
+    expect(
       (await assignPOST(request(ASSIGN_URL), { params: Promise.resolve({ id: "call-1" }) })).status
     ).toBe(401);
     expect((await logoutPOST(request(LOGOUT_URL))).status).toBe(401);
@@ -90,6 +98,13 @@ describe("admin API guard safety (real requireAdminApi)", () => {
   it("401s on every guarded route when the only cookie is a valid owner session", async () => {
     const cookie = ownerCookie();
     expect((await businessesPOST(request(BIZ_URL, cookie))).status).toBe(401);
+    expect(
+      (
+        await businessesPATCH(request(`${BIZ_URL}/some-biz-id`, cookie), {
+          params: Promise.resolve({ id: "some-biz-id" }),
+        })
+      ).status
+    ).toBe(401);
     expect(
       (
         await assignPOST(request(ASSIGN_URL, cookie), {

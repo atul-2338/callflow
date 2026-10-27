@@ -296,3 +296,103 @@ describe("owner push (scheduled after the response)", () => {
     warn.mockRestore();
   });
 });
+
+describe("business matching — assignedNumber (per-business DID)", () => {
+  let bizAId = "";
+  let bizBId = "";
+
+  beforeAll(async () => {
+    const { createBusiness } = await import("./db");
+    // Two extra businesses with DIFFERENT assigned DIDs. Their phoneNumbers
+    // are never dialled in these tests, so every link below is via
+    // assignedNumber (or, after it is cleared, the legacy rules).
+    bizAId = (
+      await createBusiness({
+        phoneNumber: "+15550002222",
+        carrier: "other",
+        forwardingStatus: "active",
+        lastVerifiedAt: null,
+        pendingVerificationFor: null,
+        pendingVerificationExpiresAt: null,
+        assignedNumber: "+15550006101",
+      })
+    ).id;
+    bizBId = (
+      await createBusiness({
+        phoneNumber: "+15550003333",
+        carrier: "other",
+        forwardingStatus: "active",
+        lastVerifiedAt: null,
+        pendingVerificationFor: null,
+        pendingVerificationExpiresAt: null,
+        assignedNumber: "+15550006102",
+      })
+    ).id;
+  });
+
+  afterAll(async () => {
+    // Restore the pre-suite shape (one business, nothing assigned) so this
+    // describe can never influence a test that runs after it.
+    const { getDb } = await import("./database");
+    getDb()
+      .prepare("DELETE FROM calls WHERE businessId IN (?, ?)")
+      .run(bizAId, bizBId);
+    getDb()
+      .prepare("DELETE FROM businesses WHERE id IN (?, ?)")
+      .run(bizAId, bizBId);
+  });
+
+  it("links a call whose called_number equals a business's assignedNumber to that business", async () => {
+    const res = await fire({ callId: "assigned-1", called_number: "+15550006101" });
+    expect(res.status).toBe(200);
+    const { getCallByDograhRunId } = await import("./db");
+    expect((await getCallByDograhRunId("assigned-1"))!.businessId).toBe(bizAId);
+  });
+
+  it("routes each of two assigned numbers to its own business", async () => {
+    const { getCallByDograhRunId } = await import("./db");
+    const resB = await fire({ callId: "assigned-2", called_number: "+15550006102" });
+    expect(resB.status).toBe(200);
+    expect((await getCallByDograhRunId("assigned-2"))!.businessId).toBe(bizBId);
+
+    // Formatted input still normalizes to the stored E.164.
+    const resA = await fire({ callId: "assigned-3", called_number: "+1 (555) 000-6101" });
+    expect(resA.status).toBe(200);
+    expect((await getCallByDograhRunId("assigned-3"))!.businessId).toBe(bizAId);
+  });
+
+  it("stores an empty called_number unlinked (several businesses → no fallback)", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const res = await fire({ callId: "assigned-empty-1", called_number: "" });
+    expect(res.status).toBe(200);
+    const { getCallByDograhRunId } = await import("./db");
+    expect((await getCallByDograhRunId("assigned-empty-1"))!.businessId).toBeNull();
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining("UNLINKED"));
+    warn.mockRestore();
+  });
+
+  it("keeps the legacy behavior when no business has an assignedNumber", async () => {
+    // Clear every assignment: the database is now shaped exactly like before
+    // the assignedNumber feature (phoneNumber matching + the fallback only).
+    const { getDb } = await import("./database");
+    getDb().prepare("UPDATE businesses SET assignedNumber = NULL").run();
+
+    const { getCallByDograhRunId } = await import("./db");
+    // 1. The legacy direct match on businesses.phoneNumber still links.
+    const direct = await fire({ callId: "assigned-legacy-1", called_number: "+15550002222" });
+    expect(direct.status).toBe(200);
+    expect((await getCallByDograhRunId("assigned-legacy-1"))!.businessId).toBe(bizAId);
+
+    // 2. An unknown number with several businesses stays unlinked, exactly as
+    //    before (the single-business fallback needs exactly one business).
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const unlinked = await fire({
+      callId: "assigned-legacy-2",
+      called_number: "+15550009099",
+    });
+    expect(unlinked.status).toBe(200);
+    expect((await getCallByDograhRunId("assigned-legacy-2"))!.businessId).toBeNull();
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining("UNLINKED"));
+    warn.mockRestore();
+  });
+});

@@ -12,8 +12,12 @@ import { useEffect, useState } from "react";
  * together trigger exactly one fetch per browser session.
  */
 
-/** Display form: "+1 (928) 331-9394" for +1 numbers, raw E.164 otherwise. */
-function formatForwardingDid(e164: string): string {
+/**
+ * Display form: "+1 (928) 331-9394" for +1 numbers, raw E.164 otherwise.
+ * Exported so CarrierForwardingStep can render the owner's own number the
+ * same way the forwarding DID is rendered.
+ */
+export function formatForwardingDid(e164: string): string {
   const match = /^\+1(\d{3})(\d{3})(\d{4})$/.exec(e164);
   if (match) return `+1 (${match[1]}) ${match[2]}-${match[3]}`;
   return e164;

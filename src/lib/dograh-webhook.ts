@@ -3,6 +3,7 @@ import {
   getAllBusinesses,
   getBusinessByPhone,
   getBusinessFcmToken,
+  normalizePhone,
   upsertDograhCall,
 } from "./db";
 import {
@@ -53,13 +54,25 @@ const PUSH_TITLES: Record<CallStatus, string> = {
 /**
  * Business matching for the pilot. Dograh's `called_number` is the number the
  * caller dialled (the DID), so link the call to the business that owns it:
- * 1. exact match on businesses.phoneNumber (normalized E.164),
- * 2. no match and exactly one business exists → that business,
- * 3. otherwise null (row is still recorded, unlinked) with a loud warning —
+ * 1. exact match on businesses.assignedNumber (normalized) — the per-business
+ *    DID an admin bound to the business; while the shared CallFlow DID serves
+ *    many businesses, only this column can tell them apart,
+ * 2. exact match on businesses.phoneNumber (normalized E.164) — the legacy
+ *    rule, unchanged,
+ * 3. no match and exactly one business exists → that business,
+ * 4. otherwise null (row is still recorded, unlinked) with a loud warning —
  *    nothing is silently dropped.
  */
 export async function matchDograhBusiness(calledNumber: string) {
   if (calledNumber) {
+    const normalized = normalizePhone(calledNumber);
+    if (normalized) {
+      const assigned = (await getAllBusinesses()).find(
+        (b) =>
+          b.assignedNumber && normalizePhone(b.assignedNumber) === normalized
+      );
+      if (assigned) return assigned;
+    }
     const direct = await getBusinessByPhone(calledNumber);
     if (direct) return direct;
   }
@@ -67,9 +80,9 @@ export async function matchDograhBusiness(calledNumber: string) {
   if (all.length === 1) return all[0];
   console.warn(
     `[dograh-webhook] Call stored UNLINKED: called_number "${calledNumber || "(missing)"}" ` +
-      `matches no business's assigned number and ${all.length} businesses exist ` +
-      "(the single-business fallback needs exactly one). Save the dialled number as " +
-      "the business's phoneNumber to link calls automatically."
+      `matches no business's assignedNumber or phoneNumber and ${all.length} businesses exist ` +
+      "(the single-business fallback needs exactly one). Set the business's assignedNumber " +
+      "(admin panel) or save the dialled number as its phoneNumber to link calls automatically."
   );
   return null;
 }

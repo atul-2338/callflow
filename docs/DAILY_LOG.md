@@ -2,6 +2,68 @@
 
 Newest entry on TOP. Add entries via `.clinerules/workflows/end-day.md`.
 
+## 2026-10-27
+
+**Done:** per-business assigned CallFlow numbers implemented (owner ok +
+variant A + explicit approval for the protected Dograh matcher only).
+Nullable `businesses.assignedNumber` (migrations/schema.sql +
+BUSINESS_ADDED_COLUMNS in src/lib/database.ts, types.ts, db.ts
+create/update). Admin PATCH /api/admin/businesses/[id]: E.164 via
+toE164InternationalPhone; 409 when the value collides with any OTHER
+business's assignedNumber OR phoneNumber (self allowed — the CallFlow row
+can re-save its DID-as-phoneNumber); empty string clears to NULL; audit
+row `business_assigned_number_set` with previousAssignedNumber. New
+EditBusinessForm + "Assigned CallFlow number" row on the admin detail
+page; guard-safety.test.ts covers the real-guard 401s for the new route.
+/api/setup/config resolves the owner via businessIdFromCookieHeader
+(read-only import from the protected business-session.ts) and serves the
+business's assignedNumber when set (leading "+" re-checked), else the
+unchanged shared-CALLFLOW_FORWARDING_DID path; CarrierForwardingStep
+renders the owner's number on the instruction card via the now-exported
+formatForwardingDid (variant A). Dograh (explicit approval, matcher only):
+matchDograhBusiness matches called_number against assignedNumber FIRST
+(normalizePhone, same normalization as the legacy path), then the
+untouched getBusinessByPhone phoneNumber match, then the untouched
+single-business fallback; auth/parse/idempotency/push/response codes
+untouched; the Telnyx answer route calls the same function so it inherits
+the two-step match (only its comments updated). New tests: 4 matcher
+cases (assigned match; two businesses route independently; empty
+called_number unlinked with several businesses; legacy behavior unchanged
+when no assignedNumber anywhere), 10 PATCH-route cases, 3 setup-config
+cases. Verification: npx tsc --noEmit clean; npm test 35/35 files,
+317/317 green; npm run build green (/api/admin/businesses/[id] in the
+route manifest; the Turbopack tracing warning on database.ts is
+pre-existing).
+
+**Unfinished & stopped at:** staged file list shown to the owner; commit,
+deploy (approved workflow) and the post-deploy curl matrix happen after
+the owner's ok.
+
+**Decisions:** empty PATCH value clears the assignment (natural inverse,
+kept minimal); 409 compares against both assignedNumber and phoneNumber of
+other businesses per owner instruction; no new DB index (matching already
+full-scans 13 rows); the operator warning in matchDograhBusiness now
+points at assignedNumber first.
+
+**Problems found:** two unrelated files hit vitest timeouts under
+full-suite parallel load on the first run (setup-config first test +
+telnyx-answer beforeAll — Windows cold-transform contention); both passed
+in isolation and on the full rerun; no code cause.
+
+**Tomorrow's first 3:** (1) owner ok → commit + deploy via the approved
+workflow + post-deploy curl matrix (Dograh 405/401/401/400/200 + an
+assigned-number roundtrip through the admin UI); (2) admin assigns real
+DIDs per business; the CallFlow row's phoneNumber correction stays a
+separate approved task; (3) owner-side NOW items unchanged (trial signup
+re-run, Dodo dashboard webhook, /admin live test).
+
+**Git state:** HEAD c134b8a (main == origin/main; deployed to VPS).
+Uncommitted — this feature (16 code/test files) + the 2026-10-26
+bookkeeping edits to BACKLOG.md/docs/DAILY_LOG.md; scratch
+`scripts/wf-11661.ts` (M) + `scripts/wf-11658.ts` (??) and
+`scripts/dodo-env-setup.sh` (??) stay unstaged (wf-* never committed;
+dodo-env-setup.sh commits only on owner word).
+
 ## 2026-10-26
 
 **Done:** BACKLOG rewritten as the owner's 7-step MVP list (NOW = steps
@@ -55,13 +117,26 @@ business-session.ts, the Dodo webhook route, and src/lib/dodo.ts
 untouched. Tests 21/21 green (signup-handoff.test.ts,
 signup/route.test.ts, confirm/route.test.ts; Dodo SDK mocked in the
 signup suite); npm run lint 0 errors (21 pre-existing warnings in files
-untouched by this change); npx tsc --noEmit clean. On disk only — no
-commit/push (rules); deploy needs owner approval.
+untouched by this change); npx tsc --noEmit clean. Owner approved deploy
+same day: full suite 300/300 + local next build green → commit c134b8a
+(9 files, +965/−66) pushed to origin/main → vps-deploy.sh: npm ci 627
+pkgs, build clean, systemd restart, health gate green. Post-deploy on
+the VPS: service active at c134b8a, /pricing 200, dograh health 200 (TLS
+too), unauthenticated POST /api/billing/confirm → 401 with the
+byte-exact body; Dograh matrix 405 / 401 no-secret / 401 wrong-secret /
+400 bad JSON / 400 missing callId; GOOD 200 — test-deploy-3 upserted the
+existing probe row (calls stayed 7); fresh test-deploy-4 insert moved
+calls 7→8 and its replay stayed 8 → delta 0 (idempotent upsert proven).
+journalctl tail clean (no errors; probe rows stored UNLINKED as
+expected; "no FCM token" notice is the known Step 5 item). Probe rows
+test-* remain in the DB, cleanable later via the repo clear-test script
+run as the callflow user.
 
-**Unfinished & stopped at:** checkout-401 fix complete on disk, awaiting
-owner approval to deploy (then a /setup trial re-run on production to
-verify end-to-end). Step 2 still open at the owner live-test roundtrip;
-Dodo dashboard webhook registration (NOW item 2) is owner-side.
+**Unfinished & stopped at:** checkout-401 fix deployed (c134b8a) and
+verified via the health matrix; the production end-to-end proof is the
+owner re-running a trial signup through /setup. Step 2 still open at the
+owner live-test roundtrip; Dodo dashboard webhook registration (NOW item
+2) is owner-side.
 
 **Decisions:** derived webhook results CONFIRMED (owner, 2026-10-26).
 DAILY_LOG uses the correct date from today onward. Step 3 delivered as
@@ -75,21 +150,18 @@ phone rows stored without the leading "+" never match signup's E.164
 lookup (audit F-09 duplicate-row bug). Optional hardening (not
 scheduled): nginx 403 for POSTs carrying a Next-Action header.
 
-**Tomorrow's first 3:** (1) owner: approve/deploy the checkout-401 fix
-(`.clinerules/workflows/deploy.md` or fix-and-deploy.bat), then re-run a
-production trial signup through /setup end-to-end; (2) owner: register
+**Tomorrow's first 3:** (1) owner: re-run a production trial signup
+through /setup end-to-end (fix is live as c134b8a — the checkout return
+page should go green and land on the dashboard); (2) owner: register
 https://callflow.biz/api/webhooks/dodo in the Dodo dashboard
 (Developer → Webhooks; subscribe `subscription.*` + `payment.*`) and run
 the checkout smoke test; (3) owner: /admin live-test roundtrip to close
 Step 2 — then Step 4 (clean 64-char WEBHOOK_SECRET + Dograh dashboard
 header cutover, mind the order).
 
-**Git state:** HEAD b7737fb (main == origin/main; deployed to VPS).
-Uncommitted — checkout-401 fix (needs owner-approved deploy): new
-`src/lib/signup-handoff.ts` + `src/lib/signup-handoff.test.ts`; modified
-`src/app/api/billing/signup/route.ts` + new `route.test.ts`,
-`src/app/api/billing/confirm/route.ts` + new `route.test.ts`,
-`src/components/onboarding/CheckoutReturn.tsx`. Also pre-existing:
+**Git state:** HEAD c134b8a (main == origin/main; deployed to VPS —
+includes the checkout-401 fix; committed with owner approval via the
+deploy workflow). Uncommitted leftovers:
 `scripts/dodo-env-setup.sh` (new, untracked — commit only on owner word),
 scratch `scripts/wf-11661.ts` (M) + `scripts/wf-11658.ts` (??) —
 `scripts/wf-*.ts` never committed per rules — plus today's memory-file

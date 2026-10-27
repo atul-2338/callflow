@@ -204,6 +204,10 @@ const BUSINESS_ADDED_COLUMNS: ReadonlyArray<readonly [string, string]> = [
   ["smsVerificationExpiresAt", "TEXT"],
   ["notificationEmail", "TEXT"],
   ["address", "TEXT"],
+  // The CallFlow DID bound to this business by an admin (nullable). Matched
+  // FIRST by matchDograhBusiness against Dograh's called_number; see
+  // migrations/schema.sql and src/lib/dograh-webhook.ts.
+  ["assignedNumber", "TEXT"],
 ];
 
 function migrateCallsTable(db: Database.Database): void {

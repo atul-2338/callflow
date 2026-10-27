@@ -156,6 +156,16 @@ export interface Business {
    */
   clientUid: string;
   phoneNumber: string;
+  /**
+   * The CallFlow DID bound to this business by an admin (PATCH
+   * /api/admin/businesses/[id]): the number a caller dials that belongs to
+   * THIS business. E.164 with leading "+", or null when the business has no
+   * dedicated number (the shared CALLFLOW_FORWARDING_DID serves it). Dograh
+   * attribution matches called_number against this field FIRST, then falls
+   * back to phoneNumber. Distinct from phoneNumber, which is the OWNER's
+   * destination number their carrier forwards from.
+   */
+  assignedNumber: string | null;
   carrier: Carrier;
   forwardingStatus: ForwardingStatus;
   lastVerifiedAt: string | null;
