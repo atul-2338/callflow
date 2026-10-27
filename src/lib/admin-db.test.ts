@@ -5,19 +5,19 @@ import { randomUUID } from "crypto";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import {
-  adminAssignCallToBusiness,
   adminCountBusinesses,
   adminCountCalls,
   adminCountUnlinkedCalls,
-  adminCreateBusiness,
   adminListAuditEntries,
   adminListBusinesses,
+  adminListBusinessesWithLastCall,
   adminListCalls,
   adminListRecentCallsForBusiness,
   adminSystemInfo,
 } from "./admin-db";
 import { logAdminAction } from "./admin-audit";
 import { closeDb, getDb } from "./database";
+import { createBusiness } from "./db";
 
 // Throwaway database so the tests never touch ./data/callflow.db. getDb()
 // resolves DATABASE_PATH lazily on first use, so setting the env in beforeAll
@@ -60,6 +60,19 @@ function seedCall(options: {
   return id;
 }
 
+/** Minimal business row factory (businesses now come only from signup). */
+async function makeBusiness(phone: string, name?: string) {
+  return createBusiness({
+    phoneNumber: phone,
+    carrier: "other",
+    forwardingStatus: "not_started",
+    lastVerifiedAt: null,
+    pendingVerificationFor: null,
+    pendingVerificationExpiresAt: null,
+    ...(name ? { billingName: name } : {}),
+  });
+}
+
 describe("admin-db", () => {
   beforeAll(() => {
     process.env.DATABASE_PATH = TEST_DB_PATH;
@@ -88,82 +101,62 @@ describe("admin-db", () => {
     });
   });
 
-  describe("adminCreateBusiness", () => {
-    it("normalizes the phone to E.164 and assigns a permanent clientUid", async () => {
-      const result = await adminCreateBusiness({
-        phoneNumber: "212 999 8877",
-        billingName: "  Acme Plumbing LLC  ",
+  describe("adminListBusinessesWithLastCall", () => {
+    it("lists businesses with each one's last-call timestamp and pool assignment", async () => {
+      const first = await makeBusiness("+12129998877", "Acme Plumbing LLC");
+      const second = await makeBusiness("+13129994444");
+      const { updateBusiness } = await import("./db");
+      await updateBusiness(first.id, { assignedNumber: "+15550100042" });
+
+      const linkedCallId = seedCall({
+        callStartedAt: "2026-10-21T09:00:00.000Z",
+        businessId: first.id,
       });
-      expect(result.ok).toBe(true);
-      if (!result.ok) return;
-      expect(result.business.phoneNumber).toBe("+12129998877");
-      expect(result.business.clientUid).toMatch(/^TE-[0-9a-f]{8}$/);
-      expect(result.business.billingName).toBe("Acme Plumbing LLC");
-      expect(result.business.carrier).toBe("other");
-      expect(result.business.forwardingStatus).toBe("not_started");
-      expect(result.business.subscriptionStatus).toBe("not_started");
+
+      const rows = await adminListBusinessesWithLastCall();
+      expect(rows.length).toBeGreaterThanOrEqual(2);
+
+      const acme = rows.find((row) => row.id === first.id);
+      expect(acme?.billingName).toBe("Acme Plumbing LLC");
+      expect(acme?.assignedNumber).toBe("+15550100042");
+      expect(acme?.lastCallAt).toBe("2026-10-21T09:00:00.000Z");
+
+      const other = rows.find((row) => row.id === second.id);
+      expect(other?.lastCallAt).toBeNull();
+
+      // The linked call really exists (sanity for the MAX() join above).
+      const stored = getDb()
+        .prepare("SELECT callStartedAt FROM calls WHERE id = ?")
+        .get(linkedCallId) as { callStartedAt: string };
+      expect(stored.callStartedAt).toBe("2026-10-21T09:00:00.000Z");
+
+      // Clean up so later totals in this file are not skewed by this seed.
+      getDb().prepare("DELETE FROM calls WHERE id = ?").run(linkedCallId);
     });
-
-    it("rejects numbers that are not valid E.164", async () => {
-      const tooShort = await adminCreateBusiness({ phoneNumber: "12345" });
-      expect(tooShort).toMatchObject({ ok: false, reason: "invalid_phone" });
-
-      const empty = await adminCreateBusiness({ phoneNumber: "   " });
-      expect(empty).toMatchObject({
-        ok: false,
-        reason: "invalid_phone",
-        message: "A business phone number is required.",
-      });
-    });
-
-    it("rejects a duplicate phone number", async () => {
-      const first = await adminCreateBusiness({ phoneNumber: "+16465551234" });
-      expect(first.ok).toBe(true);
-      const second = await adminCreateBusiness({ phoneNumber: "+16465551234" });
-      expect(second).toMatchObject({ ok: false, reason: "duplicate_phone" });
-    });
-
-    it("rejects unknown carriers", async () => {
-      const result = await adminCreateBusiness({
-        phoneNumber: "+13129994444",
-        carrier: "sky",
-      });
-      expect(result).toMatchObject({ ok: false, reason: "invalid_carrier" });
-    });
-  });
-
-  it("lists businesses newest-first", async () => {
-    await adminCreateBusiness({ phoneNumber: "+15129990001" });
-    await adminCreateBusiness({ phoneNumber: "+15129990002" });
-    const businesses = await adminListBusinesses();
-    expect(businesses.length).toBeGreaterThanOrEqual(2);
-    expect(businesses[0].phoneNumber).toBe("+15129990002");
   });
 
   describe("adminListCalls", () => {
-    it("paginates newest-first and joins a business label", async () => {
-      const biz = await adminCreateBusiness({ phoneNumber: "+17029990001" });
-      if (!biz.ok) throw new Error("business creation failed");
-      const businessId = biz.business.id;
+    it("pages newest-first with business labels and clamps the page", async () => {
+      const biz = await makeBusiness("+17029991111", "Acme Plumbing LLC");
+      seedCall({ callStartedAt: "2026-10-20T08:00:00.000Z" });
+      seedCall({ callStartedAt: "2026-10-20T09:00:00.000Z" });
+      seedCall({
+        callStartedAt: "2026-10-20T10:00:00.000Z",
+        businessId: biz.id,
+      });
 
-      seedCall({ callStartedAt: "2026-10-20T10:00:00.000Z", businessId });
-      seedCall({ callStartedAt: "2026-10-20T11:00:00.000Z" });
-      seedCall({ callStartedAt: "2026-10-20T12:00:00.000Z" });
-
-      const page1 = await adminListCalls({ page: 1, pageSize: 2 });
-      expect(page1.total).toBe(3);
-      expect(page1.pageCount).toBe(2);
-      expect(page1.calls).toHaveLength(2);
-      expect(page1.calls[0].callStartedAt).toBe("2026-10-20T12:00:00.000Z");
-
-      const page2 = await adminListCalls({ page: 2, pageSize: 2 });
-      expect(page2.calls).toHaveLength(1);
-      // label comes from COALESCE(billingName, clientUid)
-      expect(page2.calls[0].businessLabel).toMatch(
+      const page = await adminListCalls({ page: 1, pageSize: 2 });
+      expect(page.total).toBe(3);
+      expect(page.pageCount).toBe(2);
+      expect(page.calls).toHaveLength(2);
+      // Newest first: the linked call leads page 1.
+      expect(page.calls[0].businessId).toBe(biz.id);
+      expect(page.calls[0].businessLabel).toMatch(
         /^(Acme Plumbing LLC|TE-[0-9a-f]{8})$/
       );
 
-      // Page is clamped into range instead of rendering an empty table.
+      // Page 2 holds the remainder; the page is clamped into range instead of
+      // rendering an empty table.
       const clamped = await adminListCalls({ page: 99, pageSize: 2 });
       expect(clamped.page).toBe(2);
       expect(clamped.calls).toHaveLength(1);
@@ -186,47 +179,6 @@ describe("admin-db", () => {
       expect(recent).toHaveLength(1);
       expect(recent[0].businessId).toBe(target.id);
       expect(recent[0].businessLabel).toMatch(/^(Acme Plumbing LLC|TE-[0-9a-f]{8})$/);
-    });
-  });
-
-  describe("adminAssignCallToBusiness", () => {
-    it("links a call and reports the previous business", async () => {
-      const bizA = await adminCreateBusiness({ phoneNumber: "+18139990001" });
-      const bizB = await adminCreateBusiness({ phoneNumber: "+18139990002" });
-      if (!bizA.ok || !bizB.ok) throw new Error("business creation failed");
-      const callId = seedCall({ callStartedAt: "2026-10-21T09:00:00.000Z" });
-
-      const first = await adminAssignCallToBusiness(callId, bizA.business.id);
-      expect(first).toMatchObject({
-        ok: true,
-        previousBusinessId: null,
-        businessClientUid: bizA.business.clientUid,
-      });
-      const row = getDb()
-        .prepare("SELECT businessId, updatedAt FROM calls WHERE id = ?")
-        .get(callId) as { businessId: string; updatedAt: string };
-      expect(row.businessId).toBe(bizA.business.id);
-      expect(row.updatedAt).toBeTruthy();
-
-      const second = await adminAssignCallToBusiness(callId, bizB.business.id);
-      expect(second).toMatchObject({
-        ok: true,
-        previousBusinessId: bizA.business.id,
-      });
-    });
-
-    it("answers call_not_found and business_not_found", async () => {
-      const biz = await adminCreateBusiness({ phoneNumber: "+18139990003" });
-      if (!biz.ok) throw new Error("business creation failed");
-
-      expect(
-        await adminAssignCallToBusiness("no-such-call", biz.business.id)
-      ).toEqual({ ok: false, reason: "call_not_found" });
-
-      const callId = seedCall({ callStartedAt: "2026-10-21T10:00:00.000Z" });
-      expect(
-        await adminAssignCallToBusiness(callId, "no-such-business")
-      ).toEqual({ ok: false, reason: "business_not_found" });
     });
   });
 
@@ -259,6 +211,11 @@ describe("admin-db", () => {
       expect(webhook).toEqual({ name: "WEBHOOK_SECRET", set: true });
       const appAuth = info.envStatus.find((e) => e.name === "APP_AUTH_TOKEN");
       expect(appAuth).toEqual({ name: "APP_AUTH_TOKEN", set: false });
+
+      // The removed shared-DID variable must not be reported anymore.
+      expect(
+        info.envStatus.find((e) => e.name === "CALLFLOW_FORWARDING_DID")
+      ).toBeUndefined();
 
       // The secret VALUE must not leak anywhere in the returned structure.
       expect(JSON.stringify(info)).not.toContain("test-webhook-secret");

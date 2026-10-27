@@ -1,7 +1,8 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 
-import EditBusinessForm from "@/components/admin/EditBusinessForm";
+import AssignNumberButton from "@/components/admin/AssignNumberButton";
+import ReleaseNumberButton from "@/components/admin/ReleaseNumberButton";
 import StatusPill from "@/components/admin/StatusPill";
 import { adminListRecentCallsForBusiness } from "@/lib/admin-db";
 import { formatAdminDateTime } from "@/lib/admin-format";
@@ -53,14 +54,14 @@ export default async function AdminBusinessDetailPage({ params }: RouteParams) {
         <section className="rounded-2xl bg-white p-5 shadow-sm">
           <h2 className="text-sm font-semibold text-ink">Profile</h2>
           <dl className="mt-4 grid gap-4 sm:grid-cols-2">
-            <Detail label="Phone (destination number)">
+            <Detail label="Owner phone">
               <span className="font-mono text-xs">{business.phoneNumber}</span>
             </Detail>
-            <Detail label="Assigned CallFlow number">
+            <Detail label="Assigned Callflow number">
               {business.assignedNumber ? (
                 <span className="font-mono text-xs">{business.assignedNumber}</span>
               ) : (
-                <span className="text-ink-3">— (shared CallFlow number)</span>
+                <span className="text-ink-3">pending_number</span>
               )}
             </Detail>
             <Detail label="Carrier">{business.carrier}</Detail>
@@ -107,10 +108,34 @@ export default async function AdminBusinessDetailPage({ params }: RouteParams) {
         </section>
       </div>
 
-      <EditBusinessForm
-        businessId={business.id}
-        currentAssignedNumber={business.assignedNumber}
-      />
+      <section className="rounded-2xl bg-white p-5 shadow-sm">
+        <h2 className="text-sm font-semibold text-ink">Callflow number</h2>
+        {business.assignedNumber ? (
+          <>
+            <p className="mt-2 font-mono text-sm text-ink">
+              {business.assignedNumber}
+            </p>
+            <p className="mt-1 text-xs text-ink-3">
+              Calls dialled to this number are attributed to this business.
+              Releasing returns the number to the pool and leaves the business
+              pending a new one.
+            </p>
+            <div className="mt-3">
+              <ReleaseNumberButton businessId={business.id} />
+            </div>
+          </>
+        ) : (
+          <>
+            <p className="mt-2 text-sm text-ink-2">
+              pending_number — no Callflow number yet. Assign the next
+              available number from the pool (/admin/numbers).
+            </p>
+            <div className="mt-3">
+              <AssignNumberButton businessId={business.id} />
+            </div>
+          </>
+        )}
+      </section>
 
       <section className="overflow-hidden rounded-2xl bg-white shadow-sm">
         <h2 className="px-5 pt-5 text-sm font-semibold text-ink">

@@ -21,9 +21,9 @@ import { businessSessionCookieName, createBusinessSessionToken } from "@/lib/bus
 import { hashAdminPassword } from "@/lib/admin-password";
 import { resetRateLimits } from "@/lib/rate-limit";
 
-import { PATCH as businessesPATCH } from "./businesses/[id]/route";
-import { POST as assignPOST } from "./calls/[id]/assign/route";
-import { POST as businessesPOST } from "./businesses/route";
+import { POST as numbersPOST } from "./numbers/route";
+import { POST as releasePOST } from "./numbers/release/route";
+import { POST as assignPOST } from "./businesses/[id]/assign/route";
 import { POST as loginPOST } from "./login/route";
 import { POST as logoutPOST } from "./logout/route";
 
@@ -39,8 +39,9 @@ const ADMIN_HASH = hashAdminPassword("admin-pass-123456");
 const ADMIN_SECRET = "guard-safety-test-admin-secret";
 const OWNER_SECRET = "guard-safety-test-owner-secret";
 
-const BIZ_URL = "http://localhost:3000/api/admin/businesses";
-const ASSIGN_URL = "http://localhost:3000/api/admin/calls/some-call-id/assign";
+const NUMBERS_URL = "http://localhost:3000/api/admin/numbers";
+const RELEASE_URL = "http://localhost:3000/api/admin/numbers/release";
+const ASSIGN_URL = "http://localhost:3000/api/admin/businesses/some-biz-id/assign";
 const LOGOUT_URL = "http://localhost:3000/api/admin/logout";
 const LOGIN_URL = "http://localhost:3000/api/admin/login";
 
@@ -81,36 +82,22 @@ describe("admin API guard safety (real requireAdminApi)", () => {
   });
 
   it("401s without a cookie on every guarded route", async () => {
-    expect((await businessesPOST(request(BIZ_URL))).status).toBe(401);
+    expect((await numbersPOST(request(NUMBERS_URL))).status).toBe(401);
+    expect((await releasePOST(request(RELEASE_URL))).status).toBe(401);
     expect(
-      (
-        await businessesPATCH(request(`${BIZ_URL}/some-biz-id`), {
-          params: Promise.resolve({ id: "some-biz-id" }),
-        })
-      ).status
-    ).toBe(401);
-    expect(
-      (await assignPOST(request(ASSIGN_URL), { params: Promise.resolve({ id: "call-1" }) })).status
+      (await assignPOST(request(ASSIGN_URL), { params: Promise.resolve({ id: "some-biz-id" }) })).status
     ).toBe(401);
     expect((await logoutPOST(request(LOGOUT_URL))).status).toBe(401);
   });
 
   it("401s on every guarded route when the only cookie is a valid owner session", async () => {
     const cookie = ownerCookie();
-    expect((await businessesPOST(request(BIZ_URL, cookie))).status).toBe(401);
+    expect((await numbersPOST(request(NUMBERS_URL, cookie))).status).toBe(401);
+    expect((await releasePOST(request(RELEASE_URL, cookie))).status).toBe(401);
     expect(
-      (
-        await businessesPATCH(request(`${BIZ_URL}/some-biz-id`, cookie), {
-          params: Promise.resolve({ id: "some-biz-id" }),
-        })
-      ).status
-    ).toBe(401);
-    expect(
-      (
-        await assignPOST(request(ASSIGN_URL, cookie), {
-          params: Promise.resolve({ id: "call-1" }),
-        })
-      ).status
+      (await assignPOST(request(ASSIGN_URL, cookie), {
+        params: Promise.resolve({ id: "some-biz-id" }),
+      })).status
     ).toBe(401);
     expect((await logoutPOST(request(LOGOUT_URL, cookie))).status).toBe(401);
   });

@@ -7,26 +7,23 @@ import {
   adminListAuditEntries,
 } from "@/lib/admin-db";
 import { formatAdminDateTime } from "@/lib/admin-format";
+import { poolCounts } from "@/lib/numbers-pool";
 
 /**
- * Admin overview body (Phase 4). Four live stat cards plus the latest admin
- * activity; every section links deeper into the panel. Rendered by the /admin
- * entry page for signed-in admins, inside AdminPanelShell — access control
- * lives in adminPageSessionActive(), not here.
+ * Admin overview body. Live stat cards plus the latest admin activity; the
+ * "Available numbers" card turns red when the pool runs low. Rendered by the
+ * /admin entry page for signed-in admins, inside AdminPanelShell.
  */
 export default async function AdminOverview() {
-  const [businesses, calls, unlinked, audit] = await Promise.all([
+  const [businesses, calls, unlinked, audit, pool] = await Promise.all([
     adminCountBusinesses(),
     adminCountCalls(),
     adminCountUnlinkedCalls(),
     adminListAuditEntries(5),
+    Promise.resolve(poolCounts()),
   ]);
 
-  const cards = [
-    { label: "Businesses", value: businesses, href: "/admin/businesses" },
-    { label: "Calls", value: calls, href: "/admin/calls" },
-    { label: "Unlinked calls", value: unlinked, href: "/admin/calls?filter=unlinked" },
-  ];
+  const lowPool = pool.available < 3;
 
   return (
     <div className="space-y-6">
@@ -38,18 +35,46 @@ export default async function AdminOverview() {
       </div>
 
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-        {cards.map((card) => (
-          <Link
-            key={card.label}
-            href={card.href}
-            className="rounded-2xl bg-white p-5 shadow-sm transition hover:shadow"
+        <Link
+          href="/admin/businesses"
+          className="rounded-2xl bg-white p-5 shadow-sm transition hover:shadow"
+        >
+          <p className="text-xs font-medium uppercase tracking-wide text-ink-3">
+            Businesses
+          </p>
+          <p className="mt-2 text-3xl font-bold text-ink">{businesses}</p>
+        </Link>
+        <Link
+          href="/admin/numbers"
+          className={`rounded-2xl p-5 shadow-sm transition hover:shadow ${
+            lowPool ? "bg-danger/10 ring-1 ring-danger/30" : "bg-white"
+          }`}
+        >
+          <p className="text-xs font-medium uppercase tracking-wide text-ink-3">
+            Numbers available
+          </p>
+          <p
+            className={`mt-2 text-3xl font-bold ${
+              lowPool ? "text-danger" : "text-ink"
+            }`}
           >
-            <p className="text-xs font-medium uppercase tracking-wide text-ink-3">
-              {card.label}
+            {pool.available}
+          </p>
+          {lowPool && (
+            <p className="mt-1 text-xs font-medium text-danger">
+              Low pool — add numbers on the Numbers page.
             </p>
-            <p className="mt-2 text-3xl font-bold text-ink">{card.value}</p>
-          </Link>
-        ))}
+          )}
+        </Link>
+        <Link
+          href="/admin/calls"
+          className="rounded-2xl bg-white p-5 shadow-sm transition hover:shadow"
+        >
+          <p className="text-xs font-medium uppercase tracking-wide text-ink-3">
+            Calls
+          </p>
+          <p className="mt-2 text-3xl font-bold text-ink">{calls}</p>
+        </Link>
         <Link
           href="/admin/audit"
           className="rounded-2xl bg-white p-5 shadow-sm transition hover:shadow"

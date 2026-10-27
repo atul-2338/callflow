@@ -17,15 +17,10 @@
 import { readFileSync, statSync } from "fs";
 import path from "path";
 
-import type { Business, Call, CallOutcome, Carrier } from "./types";
-import { CALL_OUTCOMES, CARRIERS } from "./types";
+import type { Business, Call, CallOutcome } from "./types";
+import { CALL_OUTCOMES } from "./types";
 import { getDb, getDbPath } from "./database";
-import { createBusiness, getBusinessByPhone } from "./db";
-import {
-  isValidInternationalPhone,
-  normalizeEnvValue,
-  toE164InternationalPhone,
-} from "./util";
+import { normalizeEnvValue } from "./util";
 
 // ---- Row mappers (SQLite rows are plain; booleans arrive as 0/1) ----
 
@@ -97,99 +92,32 @@ export async function adminListBusinesses(): Promise<Business[]> {
   return rows.map(mapBusiness);
 }
 
-export interface AdminCreateBusinessInput {
-  phoneNumber: string;
-  billingName?: string | null;
-  carrier?: string | null;
+export interface AdminBusinessListRow extends Business {
+  /** ISO timestamp of the business's most recent call, or null when none. */
+  lastCallAt: string | null;
 }
 
-export type AdminCreateBusinessResult =
-  | { ok: true; business: Business }
-  | { ok: false; reason: "invalid_phone"; message: string }
-  | { ok: false; reason: "duplicate_phone"; message: string }
-  | { ok: false; reason: "invalid_carrier"; message: string };
-
 /**
- * Create a business from the admin panel.
- *
- * Validation matches the billing path's strictness on purpose: the number must
- * normalize to a valid E.164 value (same helpers the Dodo signup uses), the
- * carrier must be a known CARRIERS entry, and the phone must not already be
- * enrolled. Creation itself goes through the canonical db.ts createBusiness so
- * the clientUid lifecycle (assigned once, never rotated) is identical to
- * owner-driven signups.
+ * Every business with its last-call timestamp (admin businesses list).
+ * Number assignment is pool-driven (see src/lib/numbers-pool.ts and
+ * /api/admin/businesses/[id]/assign), so this stays a pure read view.
  */
-export async function adminCreateBusiness(
-  input: AdminCreateBusinessInput
-): Promise<AdminCreateBusinessResult> {
-  const rawPhone =
-    typeof input.phoneNumber === "string" ? input.phoneNumber.trim() : "";
-  if (!rawPhone) {
-    return {
-      ok: false,
-      reason: "invalid_phone",
-      message: "A business phone number is required.",
-    };
-  }
-
-  let e164: string;
-  try {
-    e164 = toE164InternationalPhone(rawPhone);
-  } catch (error) {
-    return {
-      ok: false,
-      reason: "invalid_phone",
-      message:
-        error instanceof Error
-          ? error.message
-          : "Enter a valid international phone number with country code.",
-    };
-  }
-  if (!isValidInternationalPhone(e164)) {
-    return {
-      ok: false,
-      reason: "invalid_phone",
-      message:
-        "Business phone number must be a valid international number with country code (e.g. +1 555 123 4567).",
-    };
-  }
-
-  const carrier =
-    input.carrier == null || input.carrier === "" ? "other" : input.carrier;
-  if (!(CARRIERS as readonly string[]).includes(carrier)) {
-    return {
-      ok: false,
-      reason: "invalid_carrier",
-      message: `carrier must be one of: ${CARRIERS.join(", ")}`,
-    };
-  }
-
-  const existing = await getBusinessByPhone(e164);
-  if (existing) {
-    return {
-      ok: false,
-      reason: "duplicate_phone",
-      message: `A business with this phone number already exists (${
-        existing.clientUid ?? existing.id
-      }).`,
-    };
-  }
-
-  const billingName =
-    typeof input.billingName === "string"
-      ? input.billingName.trim().slice(0, 200)
-      : "";
-
-  const business = await createBusiness({
-    phoneNumber: e164,
-    carrier: carrier as Carrier,
-    forwardingStatus: "not_started",
-    lastVerifiedAt: null,
-    pendingVerificationFor: null,
-    pendingVerificationExpiresAt: null,
-    billingName: billingName || null,
-  });
-  return { ok: true, business };
+export async function adminListBusinessesWithLastCall(): Promise<
+  AdminBusinessListRow[]
+> {
+  const rows = getDb()
+    .prepare(
+      `SELECT businesses.*,
+              (SELECT MAX(callStartedAt) FROM calls
+                WHERE calls.businessId = businesses.id) AS lastCallAt
+       FROM businesses
+       ORDER BY businesses.createdAt DESC`
+    )
+    .all() as unknown as Array<BusinessRow & { lastCallAt: string | null }>;
+  return rows.map(({ lastCallAt, ...row }) => ({
+    ...mapBusiness(row),
+    lastCallAt,
+  }));
 }
 
 // ---- Calls ----
@@ -281,45 +209,9 @@ export type AdminAssignCallResult =
     }
   | { ok: false; reason: "call_not_found" | "business_not_found" };
 
-/**
- * Link an existing call to a business (admin calls page). Deliberately
- * permissive about reassignment: the previous businessId is returned so the
- * caller's audit entry records what changed. Only businessId/updatedAt are
- * touched — follow-up state, transcripts, and webhook fields are never
- * modified from the admin panel.
- */
-export async function adminAssignCallToBusiness(
-  callId: string,
-  businessId: string
-): Promise<AdminAssignCallResult> {
-  const db = getDb();
-  const callRow = db
-    .prepare("SELECT * FROM calls WHERE id = ?")
-    .get(callId) as CallRow | undefined;
-  if (!callRow) return { ok: false, reason: "call_not_found" };
-
-  const businessRow = db
-    .prepare("SELECT id, clientUid FROM businesses WHERE id = ?")
-    .get(businessId) as { id: string; clientUid: string | null } | undefined;
-  if (!businessRow) return { ok: false, reason: "business_not_found" };
-
-  const now = new Date().toISOString();
-  db.prepare("UPDATE calls SET businessId = ?, updatedAt = ? WHERE id = ?").run(
-    businessId,
-    now,
-    callId
-  );
-
-  const updatedRow = db
-    .prepare("SELECT * FROM calls WHERE id = ?")
-    .get(callId) as CallRow;
-  return {
-    ok: true,
-    call: mapCall(updatedRow),
-    previousBusinessId: callRow.businessId,
-    businessClientUid: businessRow.clientUid,
-  };
-}
+// Manual call→business assignment was removed with the shared-number routing:
+// the Dograh webhook attributes every call by assignedNumber (the only match
+// rule), so there is nothing left to reassign by hand.
 
 // ---- Audit log ----
 
@@ -403,7 +295,6 @@ const SYSTEM_ENV_NAMES = [
   "DODO_PAYMENTS_API_KEY",
   "DODO_PAYMENTS_ENVIRONMENT",
   "DODO_SOLO_PRODUCT_ID",
-  "CALLFLOW_FORWARDING_DID",
   "TELNYX_API_KEY",
   "TELNYX_PUBLIC_KEY",
   "TELNYX_NUMBER",

@@ -1,6 +1,5 @@
 import Link from "next/link";
 
-import AssignCallControl from "@/components/admin/AssignCallControl";
 import StatusPill from "@/components/admin/StatusPill";
 import { adminListBusinesses, adminListCalls } from "@/lib/admin-db";
 import { formatAdminDateTime } from "@/lib/admin-format";
@@ -13,10 +12,10 @@ function callsPageHref(filter: string, page: number): string {
 }
 
 /**
- * Admin calls (Phase 4): paged, newest-first across ALL businesses with an
- * UNLINKED filter, driven entirely by searchParams so filtering/pagination
- * are server-rendered links (no client data fetching). Unlinked rows carry an
- * assign-to-business control whose POST is audit-logged.
+ * Admin calls: paged, newest-first across ALL businesses with an UNLINKED
+ * filter, driven entirely by searchParams so filtering/pagination are
+ * server-rendered links (no client data fetching). Calls are attributed
+ * automatically by assignedNumber — there is no manual assignment control.
  */
 export default async function AdminCallsPage({
   searchParams,
@@ -28,14 +27,10 @@ export default async function AdminCallsPage({
   const rawPage = Number.parseInt(typeof sp.page === "string" ? sp.page : "1", 10);
   const requestedPage = Number.isFinite(rawPage) && rawPage > 0 ? rawPage : 1;
 
-  const [data, businesses] = await Promise.all([
-    adminListCalls({ page: requestedPage, unlinkedOnly: filter === "unlinked" }),
-    adminListBusinesses(),
-  ]);
-  const businessOptions = businesses.map((business) => ({
-    id: business.id,
-    label: business.billingName ?? business.clientUid ?? business.id,
-  }));
+  const data = await adminListCalls({
+    page: requestedPage,
+    unlinkedOnly: filter === "unlinked",
+  });
 
   const tabClass = (active: boolean) =>
     `rounded-full px-3 py-1.5 text-xs font-medium transition ${
@@ -109,10 +104,7 @@ export default async function AdminCallsPage({
                           {call.businessLabel ?? call.businessId}
                         </Link>
                       ) : (
-                        <AssignCallControl
-                          callId={call.id}
-                          businesses={businessOptions}
-                        />
+                        <span className="text-xs text-ink-3">—</span>
                       )}
                     </td>
                   </tr>
