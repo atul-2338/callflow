@@ -218,3 +218,14 @@ export function telHref(
   );
   return `tel:${encoded}`;
 }
+
+/**
+ * E.164 → "+1 (928) 331-9394" for US numbers; the raw value otherwise.
+ * The one display formatter for Callflow numbers (moved here when the old
+ * /setup wizard was replaced by the linear /onboarding flow).
+ */
+export function formatUsNumber(e164: string): string {
+  const match = /^\+1(\d{3})(\d{3})(\d{4})$/.exec(e164);
+  if (match) return `+1 (${match[1]}) ${match[2]}-${match[3]}`;
+  return e164;
+}

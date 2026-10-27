@@ -177,16 +177,10 @@ export default function CheckoutReturn() {
           Payment confirmed — taking you to your final setup step…
         </p>
         <Link
-          href="/onboarding?forwarding=1"
+          href="/onboarding"
           className="ios-pill-primary w-full px-4 py-3.5 text-[15px]"
         >
-          Finish setting up call forwarding
-        </Link>
-        <Link
-          href="/setup"
-          className="mt-3 inline-flex w-full items-center justify-center rounded-full border border-separator px-4 py-3 text-[15px] font-medium text-ink-2 hover:bg-black/[0.03]"
-        >
-          Set up call forwarding
+          Finish setting up your Callflow number
         </Link>
       </Shell>
     );
