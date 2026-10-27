@@ -67,6 +67,9 @@ beforeAll(async () => {
     lastVerifiedAt: null,
     pendingVerificationFor: null,
     pendingVerificationExpiresAt: null,
+    // The number pool's mirror: this sole business owns the dialled DID, so
+    // every default-shape call in this suite links to it via assignedNumber.
+    assignedNumber: "+15550001111",
   });
 });
 
@@ -211,13 +214,16 @@ describe("happy path + persistence", () => {
     });
   });
 
-  it("links a call whose called_number matches no business to the sole business", async () => {
+  it("does NOT store a call whose called_number matches no business", async () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
-    const res = await fire({ callId: "fallback-1", called_number: "+19999999999" });
+    const res = await fire({ callId: "nomatch-1", called_number: "+19999999999" });
     expect(res.status).toBe(200);
-    const { getAllBusinesses, getCallByDograhRunId } = await import("./db");
-    const sole = (await getAllBusinesses())[0];
-    expect((await getCallByDograhRunId("fallback-1"))!.businessId).toBe(sole.id);
+    expect(res.body).toEqual({ ok: true });
+    expect(res.created).toBe(false);
+    expect(res.pushPlan).toBeNull();
+    const { getCallByDograhRunId } = await import("./db");
+    expect(await getCallByDograhRunId("nomatch-1")).toBeNull();
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining("NOT stored"));
     warn.mockRestore();
   });
 });
@@ -361,38 +367,41 @@ describe("business matching — assignedNumber (per-business DID)", () => {
     expect((await getCallByDograhRunId("assigned-3"))!.businessId).toBe(bizAId);
   });
 
-  it("stores an empty called_number unlinked (several businesses → no fallback)", async () => {
+  it("answers 200 WITHOUT storing a row for an empty called_number", async () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     const res = await fire({ callId: "assigned-empty-1", called_number: "" });
     expect(res.status).toBe(200);
     const { getCallByDograhRunId } = await import("./db");
-    expect((await getCallByDograhRunId("assigned-empty-1"))!.businessId).toBeNull();
-    expect(warn).toHaveBeenCalledWith(expect.stringContaining("UNLINKED"));
+    expect(await getCallByDograhRunId("assigned-empty-1")).toBeNull();
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining("NOT stored"));
     warn.mockRestore();
   });
 
-  it("keeps the legacy behavior when no business has an assignedNumber", async () => {
-    // Clear every assignment: the database is now shaped exactly like before
-    // the assignedNumber feature (phoneNumber matching + the fallback only).
-    const { getDb } = await import("./database");
-    getDb().prepare("UPDATE businesses SET assignedNumber = NULL").run();
+  it("advances a step-4 business to done on its first attributed call", async () => {
+    const { getBusinessById, getCallByDograhRunId, updateBusiness } = await import("./db");
+    await updateBusiness(bizAId, { onboardingStep: "4" });
 
-    const { getCallByDograhRunId } = await import("./db");
-    // 1. The legacy direct match on businesses.phoneNumber still links.
-    const direct = await fire({ callId: "assigned-legacy-1", called_number: "+15550002222" });
-    expect(direct.status).toBe(200);
-    expect((await getCallByDograhRunId("assigned-legacy-1"))!.businessId).toBe(bizAId);
+    const res = await fire({ callId: "assigned-step4", called_number: "+15550006101" });
+    expect(res.status).toBe(200);
+    expect((await getCallByDograhRunId("assigned-step4"))!.businessId).toBe(bizAId);
+    expect((await getBusinessById(bizAId))?.onboardingStep).toBe("done");
 
-    // 2. An unknown number with several businesses stays unlinked, exactly as
-    //    before (the single-business fallback needs exactly one business).
+    // A business on an earlier step is never advanced by the webhook.
+    await updateBusiness(bizBId, { onboardingStep: "2" });
+    await fire({ callId: "assigned-step2", called_number: "+15550006102" });
+    expect((await getBusinessById(bizBId))?.onboardingStep).toBe("2");
+    await updateBusiness(bizBId, { onboardingStep: "1" });
+    await updateBusiness(bizAId, { onboardingStep: "1" });
+  });
+
+  it("drops calls that only match a business's phoneNumber (no legacy fallback)", async () => {
+    // bizA's OWNER number is +15550002222 but its assigned DID is +15550006101:
+    // a call dialled to the owner number is not a CallFlow call.
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
-    const unlinked = await fire({
-      callId: "assigned-legacy-2",
-      called_number: "+15550009099",
-    });
-    expect(unlinked.status).toBe(200);
-    expect((await getCallByDograhRunId("assigned-legacy-2"))!.businessId).toBeNull();
-    expect(warn).toHaveBeenCalledWith(expect.stringContaining("UNLINKED"));
+    const res = await fire({ callId: "assigned-owner-1", called_number: "+15550002222" });
+    expect(res.status).toBe(200);
+    const { getCallByDograhRunId } = await import("./db");
+    expect(await getCallByDograhRunId("assigned-owner-1")).toBeNull();
     warn.mockRestore();
   });
 });

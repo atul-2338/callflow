@@ -1,9 +1,9 @@
 import {
   clearBusinessFcmToken,
   getAllBusinesses,
-  getBusinessByPhone,
   getBusinessFcmToken,
   normalizePhone,
+  updateBusiness,
   upsertDograhCall,
 } from "./db";
 import {
@@ -18,10 +18,11 @@ import { CALL_STATUSES, type CallStatus } from "./types";
 
 /**
  * Core of the Dograh end-of-call webhook (POST /api/webhooks/dograh):
- * auth → parse → persist (upsert) → match business → push plan. Exported as a
- * plain function (not tied to the Next Request) so vitest exercises the SAME
- * code path that production traffic uses. The route schedules {@link
- * deliverOwnerPush} with after() so the push never delays the 200 response.
+ * auth → parse → match (assignedNumber only) → persist (upsert) → push plan.
+ * Exported as a plain function (not tied to the Next Request) so vitest
+ * exercises the SAME code path that production traffic uses. The route
+ * schedules {@link deliverOwnerPush} with after() so the push never delays
+ * the 200 response.
  */
 
 export interface DograhWebhookResult {
@@ -53,15 +54,12 @@ const PUSH_TITLES: Record<CallStatus, string> = {
 
 /**
  * Business matching for the pilot. Dograh's `called_number` is the number the
- * caller dialled (the DID), so link the call to the business that owns it:
- * 1. exact match on businesses.assignedNumber (normalized) — the per-business
- *    DID an admin bound to the business; while the shared CallFlow DID serves
- *    many businesses, only this column can tell them apart,
- * 2. exact match on businesses.phoneNumber (normalized E.164) — the legacy
- *    rule, unchanged,
- * 3. no match and exactly one business exists → that business,
- * 4. otherwise null (row is still recorded, unlinked) with a loud warning —
- *    nothing is silently dropped.
+ * caller dialled (the DID), and there is exactly ONE routing rule:
+ * an exact match on businesses.assignedNumber (normalized) — the per-business
+ * DID the number pool bound to that business. There is no shared-number
+ * fallback and no legacy phoneNumber match: a call whose called_number
+ * matches no business's assignedNumber is logged loudly and dropped (the
+ * handler still answers 200, but no row is stored).
  */
 export async function matchDograhBusiness(calledNumber: string) {
   if (calledNumber) {
@@ -73,16 +71,11 @@ export async function matchDograhBusiness(calledNumber: string) {
       );
       if (assigned) return assigned;
     }
-    const direct = await getBusinessByPhone(calledNumber);
-    if (direct) return direct;
   }
-  const all = await getAllBusinesses();
-  if (all.length === 1) return all[0];
   console.warn(
-    `[dograh-webhook] Call stored UNLINKED: called_number "${calledNumber || "(missing)"}" ` +
-      `matches no business's assignedNumber or phoneNumber and ${all.length} businesses exist ` +
-      "(the single-business fallback needs exactly one). Set the business's assignedNumber " +
-      "(admin panel) or save the dialled number as its phoneNumber to link calls automatically."
+    `[dograh-webhook] Call NOT stored: called_number "${calledNumber || "(missing)"}" ` +
+      "matches no business's assignedNumber (the only match rule). If these calls " +
+      "should be recorded, assign that number to a business from the pool (/admin/numbers)."
   );
   return null;
 }
@@ -147,13 +140,26 @@ export async function handleDograhWebhook(opts: {
     };
   }
 
-  // 4. Persist — the same callId always UPDATEs the existing row (never a
-  //    duplicate) and the exact payload is kept beside the row for debugging.
+  // 4. Match the business by the dialled number (the ONE rule), then persist —
+  //    the same callId always UPDATEs the existing row (never a duplicate) and
+  //    the exact payload is kept beside the row for debugging. An unmatched
+  //    call is never stored: the dialled number belongs to no business here.
   const business = await matchDograhBusiness(payload.calledNumber);
+  if (!business) {
+    return { status: 200, body: { ok: true }, created: false, pushPlan: null };
+  }
+
+  // Onboarding auto-completion: a live call attributed to a business waiting
+  // on step 4 (verify) is proof the owner's forwarding works — advance the
+  // linear /onboarding flow to done. Never regress a finished business.
+  if (business.onboardingStep === "4") {
+    await updateBusiness(business.id, { onboardingStep: "done" });
+  }
+
   const fcmToken = await getBusinessFcmToken();
   const { id, created } = await upsertDograhCall({
     callId: payload.callId,
-    businessId: business?.id ?? null,
+    businessId: business.id,
     callerNumber: payload.callerNumber || "unknown",
     businessNumber: payload.calledNumber,
     callStatus: toCallStatus(payload.status),

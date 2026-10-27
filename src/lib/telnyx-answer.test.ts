@@ -107,6 +107,9 @@ beforeAll(async () => {
     lastVerifiedAt: null,
     pendingVerificationFor: null,
     pendingVerificationExpiresAt: null,
+    // The pool-mirrored DID: the Telnyx number that receives this business's
+    // forwarded calls IS its assignedNumber, so the dialled DID matches it.
+    assignedNumber: DIALED_DID,
   });
 });
 
@@ -151,8 +154,8 @@ describe("telnyx answer route — transfer-confirmed forwarding", () => {
       })
     );
 
-    // One business exists → the single-business fallback attributes the call
-    // (the dialled DID matches nobody) and the successful transfer confirms it.
+    // The pilot's assignedNumber is the dialled DID — a successful transfer
+    // attributes and confirms it.
     const business = await pilotBusiness();
     expect(business.forwardingStatus).toBe("active");
     expect(business.lastVerifiedAt).not.toBeNull();
@@ -174,41 +177,43 @@ describe("telnyx answer route — transfer-confirmed forwarding", () => {
     expect(business.lastVerifiedAt).toBeNull();
   });
 
-  it("confirms only the directly matched business when several exist", async () => {
+  it("confirms only the business whose assignedNumber was dialled when several exist", async () => {
     const { createBusiness, getBusinessByPhone } = await import("./db");
-    await createBusiness({
-      phoneNumber: DIALED_DID,
+    const second = await createBusiness({
+      phoneNumber: "+15550002222",
       carrier: "other",
       forwardingStatus: "pending",
       lastVerifiedAt: null,
       pendingVerificationFor: null,
       pendingVerificationExpiresAt: null,
+      // A different business owns a DIFFERENT CallFlow DID.
+      assignedNumber: "+18885450001",
     });
 
     stubTelnyxTransfer(true);
 
-    // Dialled DID = the second business → direct match wins over everything.
+    // Dialled DID = the pilot's assignedNumber → only the pilot is confirmed.
     const res = await POST(signedRequest(buildEventBody()));
     expect(res.status).toBe(200);
 
-    const direct = await getBusinessByPhone(DIALED_DID);
-    expect(direct?.forwardingStatus).toBe("active");
-    expect(direct?.lastVerifiedAt).not.toBeNull();
-
     const pilot = await pilotBusiness();
-    expect(pilot.forwardingStatus).toBe("pending");
+    expect(pilot.forwardingStatus).toBe("active");
+    expect(pilot.lastVerifiedAt).not.toBeNull();
+
+    const other = await getBusinessByPhone(second.phoneNumber);
+    expect(other?.forwardingStatus).toBe("pending");
   });
 
-  it("updates nothing when the call is unattributed (no match, several businesses)", async () => {
+  it("updates nothing when the dialled DID matches no business", async () => {
     stubTelnyxTransfer(true);
 
-    // Dialled DID matches no business and two exist → fallback disabled.
+    // Dialled DID matches no assignedNumber → nothing to confirm.
     const res = await POST(signedRequest(buildEventBody({ to: "+19995550000" })));
     expect(res.status).toBe(200);
 
     const { getBusinessByPhone } = await import("./db");
-    expect((await getBusinessByPhone(PILOT_NUMBER))?.forwardingStatus).toBe("pending");
-    expect((await getBusinessByPhone(DIALED_DID))?.forwardingStatus).toBe("active");
+    expect((await getBusinessByPhone(PILOT_NUMBER))?.forwardingStatus).toBe("active");
+    expect((await getBusinessByPhone("+15550002222"))?.forwardingStatus).toBe("pending");
   });
 
   it("acknowledges non-call.initiated events without transferring", async () => {
