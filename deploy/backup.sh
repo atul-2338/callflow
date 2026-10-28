@@ -11,6 +11,8 @@
 # Retention: daily copies for 14 days, weekly copies for 8 weeks.
 #   /var/backups/callflow/daily/callflow-2026-09-14.zstd
 #   /var/backups/callflow/weekly/callflow-2026-09-07.zstd
+# Those directories are on the same disk as the database, so the last step here
+# hands them to deploy/backup-offsite.sh, which pushes them off-server.
 
 set -euo pipefail
 
@@ -67,10 +69,17 @@ find "$WEEKLY_DIR" -name 'callflow-*' -mtime +"$((KEEP_WEEKLY * 7))" -delete
 
 echo "==> ${OUT}  ($(du -h "$OUT" | cut -f1))"
 
-# !!! A backup on the same disk as the database is not a backup. This box has no
-# platform snapshot layer, so push off-server. Un-comment ONE of these and store
-# the destination's credentials in root's env, not in this file:
+# --- Off-server copy -----------------------------------------------------------
+# A backup on the same disk as the database is not a backup, and this box has no
+# platform snapshot layer. deploy/backup-offsite.sh pushes ${BACKUP_ROOT} to a
+# destination configured in /etc/callflow/backup.env (RUNBOOK.md §13.3):
 #
-#   rsync -a --delete-after "${BACKUP_ROOT}/" user@backup-host:/srv/backups/callflow/
-#   aws s3 sync "${BACKUP_ROOT}" s3://YOUR-BUCKET/callflow --delete --storage-class STANDARD_IA
-#   rclone sync "${BACKUP_ROOT}" rclone-remote:callflow --max-age 90d
+#   OFFSITE_DEST=/mnt/nas/callflow | user@host:/srv/backups/callflow
+#   OFFSITE_DEST=s3://YOUR-BUCKET/callflow | rclone-remote:callflow
+#   OFFSITE_BACKUP_TOOL=auto|rclone|aws|rsync|cp   OFFSITE_REQUIRED=0|1
+#
+# Credentials stay in that root-only env file, never in this repo. With
+# OFFSITE_DEST unset the step logs a notice and succeeds, so the nightly timer
+# stays green until a destination exists; a real push failure obeys
+# OFFSITE_REQUIRED (1 = fail the unit so nobody misses it).
+bash "$(dirname "${BASH_SOURCE[0]}")/backup-offsite.sh"

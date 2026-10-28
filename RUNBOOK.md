@@ -320,7 +320,7 @@ Use this checklist before allowing real traffic:
 - [ ] transcript is stored
 - [ ] push result is recorded or skipped cleanly
 - [ ] Nginx is serving the domain over HTTPS
-- [ ] backup job is enabled
+- [ ] backup job is enabled and its off-site copy is configured (RUNBOOK §13.3)
 - [ ] rollback plan is documented
 
 ---
@@ -331,6 +331,7 @@ The server-side deployment process is already scripted in:
 
 - `deploy/vps-deploy.sh`
 - `deploy/backup.sh`
+- `deploy/backup-offsite.sh`
 - `deploy/systemd/callflow-backup.service`
 - `deploy/systemd/callflow-backup.timer`
 
@@ -340,6 +341,92 @@ To test the backup flow:
 sudo systemctl status callflow-backup.timer
 sudo journalctl -u callflow-backup.service -n 50 --no-pager
 ```
+
+### 13.1 What the nightly job writes
+
+- live database: `/var/data/callflow.db` (from `DATABASE_PATH` in `/srv/callflow/.env`)
+- `deploy/backup.sh` snapshots it with SQLite's `VACUUM INTO` (the WAL is folded in)
+  and compresses the snapshot with `zstd` (`gzip` if zstd is missing):
+  - `/var/backups/callflow/daily/callflow-YYYY-MM-DD.zstd` — 14 daily copies kept
+  - `/var/backups/callflow/weekly/callflow-YYYY-MM-DD.zstd` — 8 weekly copies kept
+    (Sunday's daily copy is promoted)
+- then it hands those directories to `deploy/backup-offsite.sh` (see 13.3).
+
+`callflow-backup.timer` is the only scheduler: `OnCalendar=*-*-* 03:15:00`,
+`Persistent=true` (a missed night runs as soon as the box is back). `crontab` is
+intentionally empty on this box.
+
+### 13.2 Restore
+
+```bash
+# 1. pick a snapshot and unpack it to a scratch file
+sudo zstd -d -o /tmp/restore.db /var/backups/callflow/daily/callflow-YYYY-MM-DD.zstd
+sudo sqlite3 /tmp/restore.db 'PRAGMA integrity_check;'      # must print: ok
+sudo sqlite3 /tmp/restore.db 'SELECT count(*) FROM calls;'  # sanity-check the data
+
+# 2. stop the app, replace the live DB (keep the current one as a rollback copy)
+sudo systemctl stop callflow
+sudo cp -p /var/data/callflow.db /var/data/callflow.db.before-restore
+sudo install -o callflow -g callflow -m 644 /tmp/restore.db /var/data/callflow.db
+sudo rm -f /var/data/callflow.db-wal /var/data/callflow.db-shm
+sudo systemctl start callflow
+curl -sS http://127.0.0.1:3000/api/webhooks/dograh/health   # {"ok":true,...}
+```
+
+Never restore from `/opt/callflow/backups/*.db`: that is the retired October 2026
+`/opt/callflow` install, backed up from a dead database path by a leftover
+`/etc/cron.d/callflow-backup` entry. Use `/var/backups/callflow` (above) only.
+
+### 13.3 Off-server copy — required (same disk is not a backup)
+
+`/var/backups/callflow` and `/var/data/callflow.db` share `/dev/vda2`, and this box
+has no platform snapshot layer, so the snapshots must leave the machine.
+`deploy/backup-offsite.sh` is the last step of `deploy/backup.sh` and is inert until
+you give it a destination:
+
+```bash
+# 1. pick a destination and put the settings (plus any remote credentials) in a
+#    root-only env file — never in the repo, never on the command line
+sudo install -d -m 700 /etc/callflow
+sudo tee /etc/callflow/backup.env >/dev/null <<'EOF'
+OFFSITE_BACKUP_TOOL=auto
+OFFSITE_DEST=rclone-remote:callflow
+OFFSITE_REQUIRED=1
+OFFSITE_PRUNE=0
+EOF
+sudo chown root:root /etc/callflow/backup.env && sudo chmod 600 /etc/callflow/backup.env
+
+# 2. make the tool available (rclone is the most portable: one static binary and it
+#    speaks B2 / S3 / R2 / SFTP / Drive alike)
+curl -fsSL https://rclone.org/install.sh | sudo bash
+sudo rclone config            # create the remote named in OFFSITE_DEST
+
+# 3. prove it end-to-end (uploads tonight's snapshots and prints what landed)
+sudo bash /srv/callflow/deploy/backup.sh
+sudo journalctl -u callflow-backup.service -n 20 --no-pager   # after the next 03:15 run
+```
+
+Destination shapes and the tool each one selects:
+
+| `OFFSITE_DEST` | tool | credentials |
+| --- | --- | --- |
+| `/mnt/nas/callflow` | `cp` | whatever mounts that path (NFS/SMB/USB) |
+| `user@host:/srv/backups/callflow` | `rsync` | root's SSH key on that host |
+| `s3://my-bucket/callflow` | `aws` | `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` (add to `backup.env`) |
+| `b2:callflow`, `r2:callflow`, … | `rclone` | the rclone remote |
+
+Knobs: `OFFSITE_BACKUP_TOOL` (`auto` default; set it explicitly when a
+`host:path` destination is ambiguous), `OFFSITE_REQUIRED=1` to make a failed push
+fail `callflow-backup.service` instead of only logging (recommended once the
+destination is proven), `OFFSITE_PRUNE=1` to delete remote files that no longer
+exist locally (off by default — off-site copies are deliberately kept if local
+retention is ever misconfigured).
+
+Checklist-ready proof: step 3's output must contain
+`offsite: pushed with '<tool>' → <dest>` and, for `cp`/`rsync`,
+`offsite: now holds N snapshot(s)`. Until `OFFSITE_DEST` is set the nightly job
+still succeeds but logs `Offsite copy is NOT configured` — treat that line as an
+open launch item.
 
 To trigger a manual deploy rollback if health checks fail, follow the logic in `deploy/vps-deploy.sh`.
 
@@ -386,6 +473,9 @@ sudo bash /srv/callflow/deploy/vps-deploy.sh
 
 # backup manual check
 sudo bash /srv/callflow/deploy/backup.sh
+
+# off-site copy on its own (prints whether a destination is configured)
+sudo bash /srv/callflow/deploy/backup-offsite.sh
 ```
 
 ---

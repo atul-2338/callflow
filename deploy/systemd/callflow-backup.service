@@ -6,9 +6,15 @@ After=network-online.target
 [Service]
 Type=oneshot
 ExecStart=/usr/bin/bash /srv/callflow/deploy/backup.sh
-# Runs as root on purpose: it must read /var/data/callflow.db and write
-# /var/backups/callflow, both owned by the service user's group at best. No
-# secrets are read, and the script writes only inside those two directories.
+# Off-site push settings and remote credentials live here (root:root, mode 600),
+# never in the repo and never in the scripts. The leading "-" makes the file
+# optional: without it the off-site step just logs that it is unconfigured.
+EnvironmentFile=-/etc/callflow/backup.env
+# rclone/aws/rsync may live outside the default ExecStart PATH.
+Environment=PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+# Runs as root on purpose: it must read /var/data/callflow.db, write
+# /var/backups/callflow, and read /etc/callflow/backup.env. The script writes
+# only inside those directories, plus whatever OFFSITE_DEST points at.
 IOSchedulingClass=idle
 Nice=10
 NoNewPrivileges=true
