@@ -99,3 +99,7 @@ next-env.d.ts
 /devlog.md
 /.clinerules/
 /.clineignore
+
+# scratch agent workflow scripts (throwaway per-task helpers — never committed,
+# see .clinerules/rules.md)
+/scripts/wf-*
