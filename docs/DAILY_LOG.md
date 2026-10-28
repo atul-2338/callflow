@@ -2,6 +2,59 @@
 
 Newest entry on TOP. Add entries via `.clinerules/workflows/end-day.md`.
 
+## 2026-10-28 (task 7 — deploy of the admin create-customer work: LIVE at `bb338ab`)
+
+**Owner-approved** (`.clinerules/workflows/deploy.md` run; the approval covered
+the `git push`). Two local commits: **`6fd29c9`** `feat(admin): create customer
++ one-time owner login link (no payment, 3-day trial)` (12 files: the 6 new
+source files, `migrations/schema.sql`, 3 additive lib edits + the admin nav
+link) and **`bb338ab`** `docs: log the admin create-customer task and refresh
+NOW/NEXT`. Staged by explicit path only — `scripts/dodo-env-setup.sh` left
+untracked, no `.env*`, no `data/`. Pre-flight gates before committing: `npm test`
+**303/303**, `npm run build` **ok**, and the tracked-diff secret scan clean (the
+pre-commit hook warned `gitleaks not found on PATH. Skipping secret scan.` — the
+manual scan stood in for it; treat this as a follow-up: install gitleaks).
+
+**Push:** `e815fbb..bb338ab -> origin/main`.
+
+**VPS run** (launched detached, then polled — a deploy outlives one tool call):
+`ssh root@45.76.252.174 "sudo nohup bash /srv/callflow/deploy/vps-deploy.sh >
+/var/log/callflow-deploy-bb338ab.log 2>&1 < /dev/null &"`. Log: dirty-tree check
+passed → `fetch` + `reset --hard origin/main` → `npm ci` → `next build` ok →
+restart → health gate `/pricing` 200 **and** `/api/webhooks/dograh/health` 200 →
+**`==> Deployed bb338ab successfully.`** (no rollback).
+
+**Post-deploy checks on the VPS:** `systemctl is-active callflow` = active;
+`git -C /srv/callflow rev-parse --short HEAD` = `bb338ab`; local health
+`{"ok":true,"calls":11}`; `https://callflow.biz/api/webhooks/dograh/health` 200
+(nginx + TLS).
+
+**Schema migrated itself on the live DB** (`/var/data/callflow.db`) — no manual
+command: `.tables` now lists `businesses`, `calls`, `owner_login_tokens`;
+`pragma table_info(businesses)` contains `ownerName`;
+`owner_login_tokens` = `id, businessId, tokenHash, createdAt, expiresAt, usedAt`
+(unique `tokenHash`, index on `businessId`).
+
+**New surfaces reachable on prod:** anon `/admin/customers` → **307** (`/admin`
+login), anon `POST /api/admin/customers` → **401**, `/owner-login?token=deadbeef`
+→ **400** (unknown token, no session minted).
+
+**Webhook matrix (secret read from `/srv/callflow/.env` into a shell var; value
+never printed — only `len=65`):** GET → **405**, POST no secret → **401**, wrong
+secret → **401**, bad JSON → **400**, missing `callId` → **400**, good payload →
+**200**; identical replay → **200** with **replay delta 0**. `calls` stayed
+**11 → 11**: the probe's `called_number=+15550001111` matches no
+`assignedNumber`, so the webhook correctly declined to store it — **zero junk
+rows**, and `clear-test.cjs` consequently deleted 0. Nothing to clean up.
+Journal tail clean (only the two restarts + the probe lines).
+
+**Not done, on purpose:** no admin-authenticated create was run against prod
+(that would write a real business row) — the owner does that in the UI; no DB
+writes beyond the matrix; no nginx/`/opt/callflow` touching. Uncommitted after
+this entry: **nothing** (this entry is committed and pushed in `origin/main`,
+so `origin/main` is one docs commit ahead of the deployed `bb338ab` — code
+parity is exact, docs never ship).
+
 ## 2026-10-28 (task 6 — admin "Create customer", admin-only, no payment)
 
 **Done:** admin page `/admin/customers` (nav link added to AdminPanelShell) with

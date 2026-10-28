@@ -96,6 +96,20 @@ order (inferred) — owner to confirm or correct.*
 
 ## DONE
 
+- **2026-10-28** — **Deployed the admin create-customer work: LIVE at `bb338ab`.**
+  Owner-approved `deploy.md` run. Feature commit `6fd29c9`, docs commit
+  `bb338ab`, pushed `e815fbb..bb338ab`. Detached VPS run logged to
+  `/var/log/callflow-deploy-bb338ab.log` → dirty-tree check ok → `npm ci` +
+  `next build` → restart → health gate `/pricing` 200 + dograh health 200 →
+  `Deployed bb338ab successfully` (no rollback). Live DB migrated itself at
+  boot: `owner_login_tokens` + `businesses.ownerName` present — **no migration
+  command needed**. Prod checks: anon `/admin/customers` 307, anon
+  `POST /api/admin/customers` 401, `/owner-login?token=…` bad token 400.
+  Webhook matrix all as expected (405/401/401/400/400/200, replay delta 0) with
+  `calls` 11 → 11 — the probe number matches no `assignedNumber` so nothing was
+  stored, i.e. **no test rows to clean**. Follow-up noticed: the pre-commit hook
+  wants gitleaks on PATH (currently skipped with a warning).
+
 - **2026-10-28** — **Admin "Create customer" (admin-only, no payment; nothing
   pushed).** New page `/admin/customers` (nav link added) + "Create customer"
   form → `POST /api/admin/customers` → `src/lib/admin-customers.ts`
