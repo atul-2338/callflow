@@ -29,12 +29,14 @@ order (inferred) — owner to confirm or correct.*
    create-business roundtrip, logout; optional nginx IP-allow block.
    First command: open https://callflow.biz/admin in a browser.
 
-2. **Step 3 follow-up — Dodo dashboard webhook registration.** Register
-   https://callflow.biz/api/webhooks/dodo in the Dodo dashboard
-   (Developer → Webhooks), subscribe to `subscription.*` and
-   `payment.*` events, then run the checkout smoke test (test product,
-   test_mode).
-   First command: open https://dashboard.dodo.dev → Developer → Webhooks.
+2. **Off-site backup destination (owner — the push step is written and
+   validated but inert until configured).** Install rclone (or point
+   `OFFSITE_DEST` at a mounted NAS / S3 bucket), write
+   `/etc/callflow/backup.env` (root:root 600, `OFFSITE_REQUIRED=1` once
+   proven), then `sudo bash /srv/callflow/deploy/backup.sh` and look for
+   `offsite: pushed with '<tool>' → <dest>`. See RUNBOOK §13.3. The
+   script is live (e815fbb, 2026-10-28); the unit still needs a reinstall.
+   First command: `ssh root@45.76.252.174 "ls -l /etc/callflow/backup.env 2>&1"`
 
 3. **Step 4 — Clean 64-char WEBHOOK_SECRET.** Canonical secret is 48
    chars (`4b33…`); replace with a clean 64-char value and update the
@@ -60,10 +62,31 @@ order (inferred) — owner to confirm or correct.*
 
 ## NEXT (week-1 — owner to confirm/add)
 
-7. **Key rotation runbook** — documented rotate procedure for
+7. **Reinstall the backup unit (its code is already live)** — `deploy/backup-offsite.sh` +
+   `deploy/backup.sh` + `deploy/systemd/callflow-backup.service`
+   (`EnvironmentFile=-/etc/callflow/backup.env`) via
+   `.clinerules/workflows/deploy.md`, then reinstall the unit
+   (`daemon-reload`) — the scripts themselves already shipped to
+   prod on 2026-10-28 (`e815fbb`). Unblocks NOW item 2.
+8. **Retire the `/opt/callflow` decoy (NEEDS EXPLICIT OWNER OK — archive,
+   never delete).** Old install + `/opt/callflow/data` + 16 decoy backups in
+   `/opt/callflow/backups` + the `/etc/cron.d/callflow-backup` entry that
+   keeps writing them. Live tree is `/srv/callflow`; live DB
+   `/var/data/callflow.db`.
+   First command: `ssh root@45.76.252.174 "cat /etc/cron.d/callflow-backup"`
+9. **Key rotation runbook** — documented rotate procedure for
    WEBHOOK_SECRET, BUSINESS_SESSION_SECRET, ADMIN_SESSION_SECRET
    (including the Dograh dashboard cutover order).
-8. *Owner's week-1 list goes here (monitoring, backups, docs, …).*
+10. *Owner's week-1 list goes here (monitoring, backups, docs, …).*
+11. **Admin "Create customer" follow-ups (owner decisions, none blocking).**
+    (a) number-pool dropdown for the assigned-number field (today: plain E.164
+    text, strict `+1` + 10 digits); (b) decide whether the admin-entered owner
+    email should keep filling `notificationEmail` (it now does, so call alerts
+    work immediately) or stay billing-only like self-signup; (c) decide when to
+    remove the self-serve path — still present and untouched: `/onboarding`
+    wizard + `POST /api/billing/signup`, `/setup` (redirect only),
+    `/api/onboarding/{start,state,step}`, `/checkout/return`, `/pricing`.
+    **Nothing gets deleted without explicit owner approval.**
 
 ## LATER (the rest)
 
@@ -73,6 +96,84 @@ order (inferred) — owner to confirm or correct.*
 
 ## DONE
 
+- **2026-10-28** — **Admin "Create customer" (admin-only, no payment; nothing
+  pushed).** New page `/admin/customers` (nav link added) + "Create customer"
+  form → `POST /api/admin/customers` → `src/lib/admin-customers.ts`
+  `createAdminCustomer()`: one synchronous SQLite transaction writes the
+  business (same columns/defaults as `createBusiness` in `db.ts`, so the row is
+  identical to a self-signed-up one) **and** the one-time login token
+  (`owner_login_tokens`, sha256 hash only). Trial starts now (3 days, same as
+  `activate-pilot.cjs`: `subscriptionStatus='active'`, `trialStartedAt=now`,
+  `dodoSubscriptionId='sub_local_pilot_<ts>_<hex>'`), `onboardingStep='done'`
+  (so the login lands on /app, not the wizard), `assignedNumber` from the typed
+  E.164 number (409 if another business uses it; pool entry claimed/release-able
+  afterwards). Login is a **link, not a password**: `GET /owner-login?token=…`
+  consumes it once, mints the existing `callflow_business_session` cookie
+  (business-session.ts untouched) and redirects to /app; 7-day expiry. Schema
+  additions: `businesses.ownerName` (nullable, `BUSINESS_ADDED_COLUMNS`) +
+  `owner_login_tokens` (created at boot by `migrations/schema.sql`, so **no
+  migration command**). Verified end-to-end on a throwaway DB: 201 create,
+  409s (number / name / owner phone), 400s (field + format), 307→/app with the
+  session cookie, second use of the same link 400, anon 401/307→/admin, owner
+  cookie can't open /admin, `/api/me` = `trialing`/entitled. Gates:
+  `tsc --noEmit` exit 0, `eslint` 0 errors, `npm test` 303/303, `npm run build`
+  exit 0. Dograh webhook, call logging and `assignedNumber` routing untouched.
+
+- **2026-10-28** — **Production deploy of the 6 pending commits: LIVE at
+  `e815fbb`.** Owner-approved 4-step run. Pre-deploy backup
+  `callflow-pre-deploy-20261028-061208.db` (155,648 B, `integrity_check` ok,
+  calls=11 / businesses=14, `600 callflow:callflow` — matches the two existing
+  pre-deploy dumps). Push `4c50580..e815fbb` (all 6 in order:
+  `38fbef9`→`5bf4f3b`→`ca9ecab`→`b89a724`→`0d50364`→`e815fbb`); parity restored
+  (`origin/main..HEAD` = 0). `deploy/vps-deploy.sh` → `Deployed e815fbb
+  successfully`, no rollback, its gate `/pricing -> 200`,
+  `/api/webhooks/dograh/health -> 200`. Post-deploy checks: `/pricing` 200,
+  health `{"ok":true,"calls":11}` (public https + localhost), `/onboarding`
+  200, Numbers route compiled into the build
+  (`admin/(protected)/numbers/page.js`) behind the `/admin/numbers` 307 auth
+  gate; `/setup` now 307→`/onboarding`. Pre-flight gates re-run green
+  (`npm test` 303/303 — yesterday's `telnyx-answer` flake did not recur —
+  and `npm run build` exit 0). Remainder: reinstall `callflow-backup.service`
+  with `EnvironmentFile=` (NEXT 7) so the nightly off-site push activates.
+- **2026-10-27** — **Pre-deploy repo cleanup (deploy held on owner's call —
+  no push, no deploy, no DB backup taken).** Tree before: 4 unpushed commits
+  (`38fbef9`→`b89a724`), a staged-but-orphaned settings WIP (4 files,
+  +208/−260: `saveClientSettings` loses `address`, SettingsPanel rewritten,
+  `tsc` clean, no settings tests exist), modified tracked `scripts/wf-11661.ts`,
+  and 7 untracked scratch scripts. Actions: stashed the settings WIP
+  (`stash@{0}`, recoverable — `git stash pop`), restored `scripts/wf-11661.ts`
+  (copy kept at `%TEMP%\wf-11661.ts.bak`), added `/scripts/wf-*` to
+  `.gitignore`, committed the off-site backup work locally as `0d50364`
+  (deploy/backup-offsite.sh + backup.sh + backup unit + RUNBOOK §13) and
+  `.gitignore` as `e815fbb`. `origin/main` still `4c50580` — **6 commits now
+  await an approved push**. Residual dirt: `BACKLOG.md`/`docs/DAILY_LOG.md`
+  (housekeeping) + untracked `scripts/dodo-env-setup.sh` (unclassified).
+  Pre-flight note: full `npm test` flaked once on `telnyx-answer.test.ts`
+  (beforeAll >10s hook timeout under 33-suite load; 6/6 standalone in 7.1s,
+  no assertion failed) — re-run at go-time.
+- **2026-10-27** — **Production audit + off-site backups (plan items 1+2):**
+  read-only SSH probe confirmed service active (`NRestarts=0`), nginx, TLS to
+  2027-01-20, `/pricing` 200, dograh health `{"ok":true,"calls":11}`, live DB
+  `integrity_check` ok (11 calls / 14 businesses, last call 2026-10-27T07:58Z),
+  `assignedNumber` column live, backup timer green, disk 22% used. Off-site gap
+  closed in code: new `deploy/backup-offsite.sh` (auto|rclone|aws|rsync|cp;
+  `OFFSITE_DEST` / `OFFSITE_REQUIRED` / `OFFSITE_PRUNE`; credentials in a
+  root-only `/etc/callflow/backup.env` loaded by the unit's
+  `EnvironmentFile=-`), invoked as the last step of `deploy/backup.sh`;
+  RUNBOOK §13.1–13.3 (snapshot layout, restore, off-site setup table).
+  Validated on the VPS from a /tmp copy: real DB → 8900-byte zstd snapshot →
+  cp push exit 0; the pushed copy `integrity_check` ok; unset dest = notice +
+  exit 0; missing/unknown tool and missing backup root exit 1 only under
+  `OFFSITE_REQUIRED=1`; production `/var/backups/callflow` md5 unchanged.
+  Two footguns found and written into activeContext.md: the live DB is
+  `/var/data/callflow.db` (NOT `/opt/callflow/data`), and a leftover
+  `/etc/cron.d/callflow-backup` still backs up that dead `/opt` DB daily.
+  Not committed, not deployed (script + unit install ride the next approved
+  deploy).
+- **2026-10-27** — **Dodo dashboard webhook registration: CLOSED** (was NOW
+  item 2). The VPS journal shows `subscription.updated` applied at
+  2026-10-27 10:54 UTC, so the production endpoint is registered and firing;
+  no dashboard-side work remains.
 - **2026-10-27** — **Per-business assigned CallFlow numbers:** nullable
   `businesses.assignedNumber` (schema.sql + BUSINESS_ADDED_COLUMNS
   migration + types.ts + db.ts create/update); admin PATCH
@@ -87,8 +188,15 @@ order (inferred) — owner to confirm or correct.*
   then the unchanged phoneNumber match and single-business fallback; the
   Telnyx answer route inherits via the shared function. Tests: 10
   PATCH-route, 4 matcher, 3 setup-config, guard-safety covers PATCH.
-  Full suite 317/317; tsc clean; next build green. Not yet
-  committed/deployed — awaiting owner ok.
+  Full suite 317/317; tsc clean; next build green. Deployed same day with
+  owner approval + conditions: pre-deploy sqlite3 .backup to
+  /var/backups/callflow/callflow-20261027-053441.db (144 KiB, 600,
+  callflow-owned, integrity ok), commit 4c50580 pushed, vps-deploy.sh
+  green, post-deploy roundtrip proved both match paths live
+  (assignedNumber → throwaway test-biz-rt-1; shared DID → CallFlow row
+  TE-0ed336c7), then all test-% call rows + the throwaway deleted
+  (businesses 13→14→13; calls 9→11→7 — the −2 are the old test-deploy
+  probes; real calls untouched at 7). All checks green.
 - **2026-10-26** — **Checkout-401 fix (pre-created businesses):** the
   /setup flow pre-creates the business row in Step 1, so
   /api/billing/signup treated it as "existing" and minted no session →
