@@ -203,6 +203,9 @@ export interface Business {
   /** Business address (Settings → Business information → Address). Free-form
    * text; null in SQLite until the owner saves one. */
   address?: string;
+  /** Owner's display name, captured only when an admin creates the customer on
+   * /admin/customers. Absent/null for self-serve signups, which never ask. */
+  ownerName?: string | null;
   createdAt: string;
   updatedAt: string;
 }

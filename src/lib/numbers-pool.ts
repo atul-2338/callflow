@@ -177,6 +177,66 @@ export async function releaseNumber(businessId: string): Promise<boolean> {
   return Boolean(entry);
 }
 
+/**
+ * Is `number` already in use by a business other than `exceptBusinessId`?
+ * Returns that business's id, or null when the number is free.
+ *
+ * Checks both sources, because they can drift: the pool file (an entry marked
+ * `assigned`, even if the business row lost the value) and the business rows
+ * themselves — `assignedNumber` (the Dograh routing column) plus `phoneNumber`,
+ * since a pool number must never collide with an owner's forwarding destination
+ * (the same rule addNumbers applies when importing).
+ */
+export async function findNumberOwner(
+  number: string,
+  exceptBusinessId?: string
+): Promise<string | null> {
+  const entry = readPool().find((e) => e.number === number);
+  if (
+    entry?.status === "assigned" &&
+    entry.businessId &&
+    entry.businessId !== exceptBusinessId
+  ) {
+    return entry.businessId;
+  }
+
+  for (const business of await getAllBusinesses()) {
+    if (business.id === exceptBusinessId) continue;
+    if (business.assignedNumber === number || business.phoneNumber === number) {
+      return business.id;
+    }
+  }
+  return null;
+}
+
+/**
+ * Claim ONE specific number for a business in the pool file (admin-created
+ * customers, where the admin types the number instead of drawing it from the
+ * pool). Keeps the file truthful: an existing `available` entry is marked
+ * `assigned` to this business, and a number that is not in the file at all is
+ * appended as `assigned` — so /admin/numbers shows it and "Release" can return
+ * it, and a later signup can never draw the same number.
+ *
+ * Pool-file only, on purpose: SQLite writes cannot join this file I/O, so the
+ * business row is written first (in one DB transaction) and this runs after
+ * that commit. A failure here is logged loudly but never fails the creation —
+ * routing uses businesses.assignedNumber, which is already correct. Prefer
+ * findNumberOwner() before calling this; it does not re-check ownership.
+ */
+export function claimPoolNumberEntry(businessId: string, number: string): void {
+  const entries = readPool();
+  const assignedAt = new Date().toISOString();
+  const entry = entries.find((e) => e.number === number);
+  if (entry) {
+    entry.status = "assigned";
+    entry.businessId = businessId;
+    entry.assignedAt = assignedAt;
+  } else {
+    entries.push({ number, status: "assigned", businessId, assignedAt });
+  }
+  writePool(entries);
+}
+
 export interface AddNumbersResult {
   added: string[];
   /** Lines that were not valid "+1" + 10 digits. */

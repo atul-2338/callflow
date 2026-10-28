@@ -126,9 +126,29 @@ CREATE TABLE IF NOT EXISTS businesses (
   -- Owner alert email (Settings → Business information → Email). New-call
   -- alert emails are sent here (src/lib/email.ts + dograh-webhook.ts).
   notificationEmail TEXT,
+  -- Owner's display name as typed by an admin in /admin/customers → "Create
+  -- customer". NULL for self-serve signups, which never collect it.
+  ownerName TEXT,
   createdAt TEXT NOT NULL,
   updatedAt TEXT NOT NULL
 );
+
+-- One-time owner login links minted from /admin/customers ("Copy new login
+-- link"). The link carries a 32-byte random token; only its SHA-256 hash is
+-- stored here, so a database leak can never be replayed into a session.
+-- Single use (usedAt is stamped by the atomic consume UPDATE) and expires 7
+-- days after minting. Rows are tiny and never deleted — they double as the
+-- trail of which link was used, and when.
+CREATE TABLE IF NOT EXISTS owner_login_tokens (
+  id TEXT PRIMARY KEY,
+  businessId TEXT NOT NULL,
+  tokenHash TEXT NOT NULL UNIQUE,
+  createdAt TEXT NOT NULL,
+  expiresAt TEXT NOT NULL,
+  usedAt TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_owner_login_tokens_business
+  ON owner_login_tokens(businessId);
 
 -- Landing-page waitlist signups (Phase 6 tester acquisition).
 CREATE TABLE IF NOT EXISTS waitlist (

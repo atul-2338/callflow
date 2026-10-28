@@ -204,6 +204,10 @@ const BUSINESS_ADDED_COLUMNS: ReadonlyArray<readonly [string, string]> = [
   ["smsVerificationExpiresAt", "TEXT"],
   ["notificationEmail", "TEXT"],
   ["address", "TEXT"],
+  // Owner display name, captured only by the admin "Create customer" form
+  // (/admin/customers). Nullable and unused by the self-serve flow, so existing
+  // rows and new signups simply leave it NULL.
+  ["ownerName", "TEXT"],
   // The CallFlow DID bound to this business by an admin (nullable). Matched
   // FIRST by matchDograhBusiness against Dograh's called_number; see
   // migrations/schema.sql and src/lib/dograh-webhook.ts.
