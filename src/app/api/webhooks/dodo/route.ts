@@ -1,7 +1,8 @@
 import { NextResponse } from "next/server";
 import { Webhook } from "standardwebhooks";
-import { applyDodoWebhookEvent } from "@/lib/db";
+import { applyDodoWebhookEvent, getBusinessById } from "@/lib/db";
 import { normalizeDodoEvent } from "@/lib/dodo-events";
+import { assignNumber } from "@/lib/numbers-pool";
 import { getDodoWebhookSecret } from "@/lib/dodo";
 
 export const runtime = "nodejs";
@@ -104,6 +105,22 @@ export async function POST(request: Request) {
       subscriptionId: normalized.subscriptionId,
       status: normalized.subscriptionStatus,
     });
+
+    // Auto-assign pool number on first activation if not already assigned.
+    if (normalized.eventType === "subscription.active") {
+      const business = await getBusinessById(result.businessId);
+      if (business && !business.assignedNumber) {
+        const poolResult = await assignNumber(result.businessId, business.phoneNumber);
+        if (poolResult.pending) {
+          console.error("[dodo-webhook] pool empty — no number assigned to", result.businessId);
+        } else {
+          console.info("[dodo-webhook] pool number assigned", {
+            businessId: result.businessId,
+            assignedNumber: poolResult.assignedNumber,
+          });
+        }
+      }
+    }
   } else {
     console.warn("[dodo-webhook] no Callflow business matched this event", {
       eventType: normalized.eventType,
