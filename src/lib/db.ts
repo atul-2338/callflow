@@ -789,6 +789,15 @@ export async function getBusinessByDodoSubscriptionId(
   return row ? mapBusiness(row) : undefined;
 }
 
+export async function getBusinessByCheckoutSessionId(
+  sessionId: string
+): Promise<Business | undefined> {
+  const row = getDb()
+    .prepare("SELECT * FROM businesses WHERE dodoCheckoutSessionId = ? LIMIT 1")
+    .get(sessionId) as BusinessRow | undefined;
+  return row ? mapBusiness(row) : undefined;
+}
+
 export interface DodoWebhookUpdate {
   webhookId: string;
   eventType: string;

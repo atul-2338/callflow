@@ -10,7 +10,7 @@ import {
   reconcileDodoCheckout,
   trialEndsAt,
 } from "@/lib/billing";
-import { getBusinessById } from "@/lib/db";
+import { getBusinessByCheckoutSessionId, getBusinessById } from "@/lib/db";
 import {
   clearSignupHandoffCookie,
   signupHandoffFromCookieHeader,
@@ -70,7 +70,26 @@ export async function POST(request: Request) {
   if (!businessId) {
     handoff = signupHandoffFromCookieHeader(cookieHeader);
     if (!handoff) {
-      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+      // Cookie-less fallback: look up business by checkout session id from body
+      let sessionIdFallback: string | null = null;
+      try {
+        const raw = await request.clone().json() as { checkoutSessionId?: unknown };
+        if (typeof raw.checkoutSessionId === "string" && raw.checkoutSessionId) {
+          sessionIdFallback = raw.checkoutSessionId;
+        }
+      } catch { /* ignore */ }
+
+      if (sessionIdFallback) {
+        const found = await getBusinessByCheckoutSessionId(sessionIdFallback);
+        if (found) {
+          // Treat as handoff with the session id we just verified from DB
+          handoff = { businessId: found.id, checkoutSessionId: sessionIdFallback };
+        }
+      }
+
+      if (!handoff) {
+        return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+      }
     }
   }
 
