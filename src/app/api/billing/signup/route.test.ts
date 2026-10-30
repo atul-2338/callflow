@@ -158,7 +158,10 @@ describe("POST /api/billing/signup", () => {
     const handoff = cookies.find((c) => c.startsWith("callflow_signup_handoff="));
     expect(handoff).toBeDefined();
     expect(handoff).toContain("HttpOnly");
-    expect(handoff).toContain("SameSite=Lax");
+    // SameSite=None + Secure: the handoff must survive the cross-site return
+    // from checkout.dodo.com, or /api/billing/confirm 401s on the way back.
+    expect(handoff).toContain("SameSite=None");
+    expect(handoff).toContain("Secure");
     expect(handoff).toContain("Max-Age=1800");
 
     // The handoff token verifies and binds to exactly this business + checkout.

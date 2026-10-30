@@ -17,6 +17,11 @@ import { normalizeEnvValue } from "./util";
  *   accepts both shapes. Required: callId. Optional: status, duration,
  *   gathered.context.customer_name, caller_number / called_number (used to
  *   link the call to its business). Everything else is ignored.
+ * - The DIALED number is additionally read from the common telephony aliases
+ *   `to` / `to_number` / `called` — at the top level, inside initial_context,
+ *   or inside a nested `call` object — but ONLY when the documented
+ *   called_number paths are absent, so the documented contract always wins.
+ *   The caller number stays on its documented paths only.
  */
 
 export type HeaderReader = { get(name: string): string | null };
@@ -55,6 +60,22 @@ function asContext(value: unknown): Record<string, unknown> {
     }
   }
   return {};
+}
+
+/**
+ * Names of a body's TOP-LEVEL keys, comma-separated and sorted, for diagnostics.
+ *
+ * The webhook logs this when a payload carries no dialled number (see
+ * dograh-webhook.ts): key NAMES are enough to show what a Dograh template
+ * actually sent, while the VALUES — which may hold a transcript or a phone
+ * number — are deliberately never logged. Sorting keeps identical payloads
+ * producing identical log lines. Non-object bodies (including the null the
+ * route produces for an unparseable body) and empty objects report "(none)".
+ */
+export function describeTopLevelKeys(body: unknown): string {
+  if (!isPlainObject(body)) return "(none)";
+  const keys = Object.keys(body);
+  return keys.length ? [...keys].sort().join(", ") : "(none)";
 }
 
 function firstString(...values: unknown[]): string {
@@ -129,6 +150,10 @@ export interface DograhWebhookPayload {
   durationSeconds: number | null;
   customerName: string | null;
   callerNumber: string;
+  /** The dialled DID, matched against businesses.assignedNumber. Read from the
+   * documented `called_number` / `initial_context.called_number` paths first,
+   * then from the `to` / `to_number` / `called` aliases (top level,
+   * initial_context, or a nested `call` object) — see parseDograhWebhookBody. */
   calledNumber: string;
 }
 
@@ -163,12 +188,33 @@ export function parseDograhWebhookBody(body: unknown): DograhWebhookPayload | nu
     ) || null;
 
   const initial = asContext(body.initial_context ?? body.initialContext);
+  // A nested `call` object (Vapi/Telnyx-shaped templates) — native or
+  // JSON-rendered by the template — is also accepted for the dialled number.
+  const call = asContext(body.call);
   return {
     callId,
     status: firstString(body.status, body.call_status),
     durationSeconds: firstFiniteNumber(body.duration, body.duration_seconds),
     customerName,
     callerNumber: firstString(body.caller_number, initial.caller_number),
-    calledNumber: firstString(body.called_number, initial.called_number),
+    // Precedence: the TWO documented paths first, in their historic order, so
+    // every payload that resolves today resolves to the exact same number.
+    // Only then the common telephony aliases, innermost scope last. Reading
+    // them last matters: a payload that carries both (say a real called_number
+    // plus a transfer target under `to`) still routes by its called_number.
+    calledNumber: firstString(
+      body.called_number,
+      initial.called_number,
+      body.to,
+      initial.to,
+      body.to_number,
+      initial.to_number,
+      body.called,
+      initial.called,
+      call.called_number,
+      call.to,
+      call.to_number,
+      call.called
+    ),
   };
 }

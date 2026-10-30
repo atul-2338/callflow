@@ -7,6 +7,7 @@ import {
   upsertDograhCall,
 } from "./db";
 import {
+  describeTopLevelKeys,
   parseDograhWebhookBody,
   readHeaderSafe,
   secretsMatch,
@@ -53,8 +54,9 @@ const PUSH_TITLES: Record<CallStatus, string> = {
 };
 
 /**
- * Business matching for the pilot. Dograh's `called_number` is the number the
- * caller dialled (the DID), and there is exactly ONE routing rule:
+ * Business matching for the pilot. `calledNumber` is the number the caller
+ * dialled (the DID) — Dograh's `called_number`, or one of the aliases the
+ * parser accepts (see dograh.ts) — and there is exactly ONE routing rule:
  * an exact match on businesses.assignedNumber (normalized) — the per-business
  * DID the number pool bound to that business. There is no shared-number
  * fallback and no legacy phoneNumber match: a call whose called_number
@@ -140,7 +142,27 @@ export async function handleDograhWebhook(opts: {
     };
   }
 
-  // 4. Match the business by the dialled number (the ONE rule), then persist —
+  // TEMP-DEBUG (remove together with the route's [DOGRAH-DEBUG] log): what the
+  // parser ACTUALLY extracted. An empty calledNumber here, next to a `to` field
+  // logged EMPTY by the route, proves the Dograh template rendered the value
+  // EMPTY (an unknown variable), not that the field name/level is wrong.
+  console.log(
+    `[dograh-webhook][TEMP-DEBUG] parsed callId=${payload.callId} calledNumber="${payload.calledNumber}"`
+  );
+
+  // 4. A payload with no dialled number cannot be routed — step 5 drops it.
+  //    Log WHICH top-level keys arrived (NAMES only, never values: a value can
+  //    be a phone number or a transcript) so a mis-templated Dograh webhook is
+  //    diagnosable from a single log line.
+  if (!payload.calledNumber) {
+    console.warn(
+      "[dograh-webhook] No called number in the payload (tried called_number, to, " +
+        "to_number, called at the top level, in initial_context, and in a nested " +
+        `call object). Top-level keys: ${describeTopLevelKeys(opts.body)}`
+    );
+  }
+
+  // 5. Match the business by the dialled number (the ONE rule), then persist —
   //    the same callId always UPDATEs the existing row (never a duplicate) and
   //    the exact payload is kept beside the row for debugging. An unmatched
   //    call is never stored: the dialled number belongs to no business here.
@@ -169,7 +191,7 @@ export async function handleDograhWebhook(opts: {
     rawPayload: JSON.stringify(opts.body ?? null),
   });
 
-  // 5. Owner push — for NEW calls only (replays/updates of the same callId
+  // 6. Owner push — for NEW calls only (replays/updates of the same callId
   //    must not re-notify). The plan is executed AFTER the response by the
   //    route via after(), so it can never delay or fail the 200.
   let pushPlan: OwnerPushPlan | null = null;

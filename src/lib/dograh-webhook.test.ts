@@ -226,6 +226,51 @@ describe("happy path + persistence", () => {
     expect(warn).toHaveBeenCalledWith(expect.stringContaining("NOT stored"));
     warn.mockRestore();
   });
+
+  it("links a call whose dialled number arrives as a `to` alias", async () => {
+    const res = await handleDograhWebhook({
+      body: {
+        callId: "alias-to-1",
+        status: "completed",
+        caller_number: "+15550000123",
+        to: "+15550001111", // the alias the parser now accepts
+      },
+      headers: authHeaders(),
+    });
+    expect(res.status).toBe(200);
+    expect(res.created).toBe(true);
+
+    const { getCallByDograhRunId, getAllBusinesses } = await import("./db");
+    const sole = (await getAllBusinesses())[0];
+    expect(await getCallByDograhRunId("alias-to-1")).toMatchObject({
+      businessId: sole.id, // routed by the alias, exactly like called_number
+      businessNumber: "+15550001111",
+      callerNumber: "+15550000123",
+    });
+  });
+
+  it("logs the top-level payload keys — names only, never values — when no called number is present", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const res = await handleDograhWebhook({
+      body: {
+        callId: "nocalled-1",
+        status: "completed",
+        transcript: "the caller said something private",
+      },
+      headers: authHeaders(),
+    });
+    expect(res.status).toBe(200); // an un-routable call is dropped, never retried
+    const { getCallByDograhRunId } = await import("./db");
+    expect(await getCallByDograhRunId("nocalled-1")).toBeNull();
+
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringContaining("Top-level keys: callId, status, transcript")
+    );
+    expect(warn).not.toHaveBeenCalledWith(
+      expect.stringContaining("the caller said something private")
+    );
+    warn.mockRestore();
+  });
 });
 
 describe("owner push (scheduled after the response)", () => {

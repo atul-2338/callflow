@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it } from "vitest";
 import {
+  describeTopLevelKeys,
   parseDograhWebhookBody,
   readHeaderSafe,
   secretsMatch,
@@ -170,5 +171,111 @@ describe("parseDograhWebhookBody — POST /api/webhooks/dograh contract", () => 
       callerNumber: "",
       calledNumber: "",
     });
+  });
+});
+
+describe("parseDograhWebhookBody — called-number aliases", () => {
+  it("accepts to / to_number / called at the top level", () => {
+    expect(parseDograhWebhookBody({ callId: "a", to: "+15550001111" })!.calledNumber).toBe(
+      "+15550001111"
+    );
+    expect(parseDograhWebhookBody({ callId: "b", to_number: 15550002222 })!.calledNumber).toBe(
+      "15550002222"
+    );
+    expect(parseDograhWebhookBody({ callId: "c", called: "+15550003333" })!.calledNumber).toBe(
+      "+15550003333"
+    );
+  });
+
+  it("accepts the same aliases inside initial_context (object or JSON string)", () => {
+    expect(
+      parseDograhWebhookBody({ callId: "a", initial_context: { to: "+15550001111" } })!
+        .calledNumber
+    ).toBe("+15550001111");
+    expect(
+      parseDograhWebhookBody({
+        callId: "b",
+        initial_context: JSON.stringify({ to_number: "+15550002222" }),
+      })!.calledNumber
+    ).toBe("+15550002222");
+    expect(
+      parseDograhWebhookBody({ callId: "c", initial_context: { called: " +15550003333 " } })!
+        .calledNumber
+    ).toBe("+15550003333");
+  });
+
+  it("accepts the aliases inside a nested call object (object or JSON string)", () => {
+    expect(parseDograhWebhookBody({ callId: "a", call: { to: "+15550001111" } })!.calledNumber).toBe(
+      "+15550001111"
+    );
+    expect(
+      parseDograhWebhookBody({
+        callId: "b",
+        call: JSON.stringify({ called_number: "+15550002222" }),
+      })!.calledNumber
+    ).toBe("+15550002222");
+  });
+
+  it("keeps the documented paths first: called_number and initial_context win over every alias", () => {
+    const payload = parseDograhWebhookBody({
+      callId: "a",
+      called_number: "+15550001111",
+      to: "+19999999999",
+      called: "+18888888888",
+      initial_context: { called_number: "+17777777777", to: "+16666666666" },
+      call: { to: "+15555555555" },
+    })!;
+    expect(payload.calledNumber).toBe("+15550001111");
+
+    // initial_context.called_number (the second documented path) still beats `to`.
+    const nested = parseDograhWebhookBody({
+      callId: "b",
+      initial_context: { called_number: "+12137771235" },
+      to: "+19999999999",
+    })!;
+    expect(nested.calledNumber).toBe("+12137771235");
+  });
+
+  it("leaves the caller number on its documented paths only", () => {
+    const payload = parseDograhWebhookBody({
+      callId: "a",
+      to: "+15550001111",
+      from: "+15550000123",
+      call: { from: "+15550000999" },
+    })!;
+    expect(payload.callerNumber).toBe("");
+    expect(payload.calledNumber).toBe("+15550001111");
+  });
+
+  it("still reports a missing number as empty when nothing matches", () => {
+    expect(
+      parseDograhWebhookBody({ callId: "a", to: "   ", unrelated: "+15550001111" })!.calledNumber
+    ).toBe("");
+  });
+});
+
+describe("describeTopLevelKeys — diagnostics without values", () => {
+  it("lists top-level names sorted, and never values", () => {
+    const line = describeTopLevelKeys({
+      status: "completed",
+      callId: "c-1",
+      transcript: "the caller said something private",
+    });
+    expect(line).toBe("callId, status, transcript");
+    expect(line).not.toContain("the caller said something private");
+    expect(line).not.toContain("completed");
+  });
+
+  it("lists only the TOP level of a nested payload", () => {
+    expect(describeTopLevelKeys({ callId: "c", call: { to: "+15550001111" } })).toBe(
+      "call, callId"
+    );
+  });
+
+  it("reports (none) for non-object bodies and empty objects", () => {
+    expect(describeTopLevelKeys(null)).toBe("(none)");
+    expect(describeTopLevelKeys("not-an-object")).toBe("(none)");
+    expect(describeTopLevelKeys([1, 2])).toBe("(none)");
+    expect(describeTopLevelKeys({})).toBe("(none)");
   });
 });

@@ -91,20 +91,27 @@ describe("signup handoff token", () => {
     expect(signupHandoffFromCookieHeader(null)).toBeNull();
   });
 
-  it("formats the cookie like the session cookie and honours Secure", () => {
+  it("formats the cookie like the session cookie: always SameSite=None and Secure", () => {
     vi.stubEnv("BUSINESS_SESSION_SECRET", TEST_SECRET);
     const token = createSignupHandoffToken("biz_1", "cs_1");
     const cookie = signupHandoffCookie(token, true);
     expect(cookie.startsWith(`${signupHandoffCookieName()}=${token}`)).toBe(true);
     expect(cookie).toContain("Path=/");
     expect(cookie).toContain("HttpOnly");
-    expect(cookie).toContain("SameSite=Lax");
+    // The checkout return arrives cross-site from checkout.dodo.com, so the
+    // cookie needs SameSite=None + Secure or the browser drops it before
+    // /api/billing/confirm can read it.
+    expect(cookie).toContain("SameSite=None");
     expect(cookie).toContain("Max-Age=1800");
     expect(cookie).toContain("Secure");
-    expect(signupHandoffCookie(token, false)).not.toContain("Secure");
+    // Secure is unconditional: the attribute is not selectable any more.
+    expect(signupHandoffCookie(token, false)).toContain("Secure");
 
     const cleared = clearSignupHandoffCookie(false);
     expect(cleared.startsWith(`${signupHandoffCookieName()}=;`)).toBe(true);
     expect(cleared).toContain("Max-Age=0");
+    // The clear must carry the same attributes, or the browser ignores it.
+    expect(cleared).toContain("SameSite=None");
+    expect(cleared).toContain("Secure");
   });
 });
