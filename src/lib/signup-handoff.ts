@@ -111,16 +111,12 @@ export function verifySignupHandoffToken(
 }
 
 export function signupHandoffCookie(token: string, secure: boolean): string {
-  return `${COOKIE_NAME}=${token}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${MAX_AGE_SECONDS}${
-    secure ? "; Secure" : ""
-  }`;
+  return `${COOKIE_NAME}=${token}; Path=/; HttpOnly; SameSite=None; Secure; Max-Age=${MAX_AGE_SECONDS}`;
 }
 
 /** Expires the handoff once it has been consumed (session minted) or superseded. */
 export function clearSignupHandoffCookie(secure: boolean): string {
-  return `${COOKIE_NAME}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0${
-    secure ? "; Secure" : ""
-  }`;
+  return `${COOKIE_NAME}=; Path=/; HttpOnly; SameSite=None; Secure; Max-Age=0`;
 }
 
 /**
