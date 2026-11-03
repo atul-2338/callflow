@@ -204,3 +204,73 @@ export async function transferCall(
   }
 }
 
+
+/* --------------------------- speak (unavailable) -------------------------- */
+
+export interface TelnyxCommandResult {
+  ok: boolean;
+  /** Telnyx's command result (e.g. "ok"). */
+  result?: string;
+  error?: string;
+}
+
+/**
+ * Play a short spoken message on a live call (Call Control `speak` action).
+ *
+ * Used when a business is no longer entitled (trial over, no active
+ * subscription): the caller hears one "not available right now" line instead of
+ * being transferred to the agent, and NEVER reaches a dead line. `commandId`
+ * keeps a retried delivery idempotent, exactly like transferCall.
+ *
+ * NOTE: the call is deliberately NOT hung up here — Telnyx's speak command is
+ * asynchronous and an immediate hangup would cut the audio. The caller hangs up
+ * after hearing the message.
+ */
+export async function speakToCaller(
+  callControlId: string,
+  message: string,
+  commandId: string
+): Promise<TelnyxCommandResult> {
+  const { apiKey } = getTelnyxConfig();
+  if (!apiKey) {
+    return { ok: false, error: "TELNYX_API_KEY is not configured." };
+  }
+
+  const endpoint = `https://api.telnyx.com/v2/calls/${encodeURIComponent(
+    callControlId
+  )}/actions/speak`;
+
+  try {
+    const res = await fetch(endpoint, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${apiKey}`,
+      },
+      body: JSON.stringify({
+        payload: message,
+        payload_type: "text",
+        voice: "female",
+        language: "en-US",
+        command_id: commandId,
+      }),
+    });
+
+    const data = (await res.json().catch(() => ({}))) as {
+      data?: { result?: string };
+      errors?: Array<{ detail?: string; title?: string }>;
+    };
+
+    if (!res.ok) {
+      const detail = data.errors?.[0]?.detail || data.errors?.[0]?.title;
+      return { ok: false, error: detail || `Telnyx HTTP ${res.status}` };
+    }
+    return { ok: true, result: data.data?.result };
+  } catch (err) {
+    return {
+      ok: false,
+      error: err instanceof Error ? err.message : "Telnyx speak failed",
+    };
+  }
+}
+

@@ -199,8 +199,14 @@ export interface Business {
   smsVerificationCode: string | null;
   smsVerificationExpiresAt: string | null;
   /** Owner alert email (Settings → Business information → Email). New-call
-   * alert emails go here; null until the owner saves one. */
+   * alert emails go here; null until the owner sets one. */
   notificationEmail: string | null;
+  /**
+   * First time a call arrived while this business was NOT entitled (trial over,
+   * no active subscription) — the one-shot stamp that stops the "trial ended"
+   * email from being sent again. Null = never sent.
+   */
+  trialEndedEmailAt?: string | null;
   /** Business address (Settings → Business information → Address). Free-form
    * text; null in SQLite until the owner saves one. */
   address?: string;

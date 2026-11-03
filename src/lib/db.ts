@@ -730,6 +730,7 @@ export async function updateBusiness(
          smsVerificationExpiresAt = @smsVerificationExpiresAt,
          notificationEmail = @notificationEmail,
          address = @address,
+         trialEndedEmailAt = @trialEndedEmailAt,
          updatedAt = @updatedAt
         WHERE id = @id`
     )

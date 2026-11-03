@@ -251,3 +251,52 @@ describe("telnyx answer route — transfer-confirmed forwarding", () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 });
+
+describe("telnyx answer route — trial-expired gate (brief Step 2)", () => {
+  it("plays the 'unavailable' message instead of transferring once onboarding is done and the trial has expired", async () => {
+    const { updateBusiness } = await import("./db");
+    const business = await pilotBusiness();
+    await updateBusiness(business.id, {
+      onboardingStep: "done",
+      subscriptionStatus: "pending_checkout",
+      // Older than the 3-day trial window.
+      trialStartedAt: new Date(Date.now() - 5 * 24 * 60 * 60 * 1000).toISOString(),
+    });
+
+    const fetchMock = vi.fn(async () => ({
+      ok: true,
+      status: 200,
+      json: async () => ({ data: { result: "ok" } }),
+    }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    try {
+      const res = await POST(signedRequest(buildEventBody()));
+      expect(res.status).toBe(200);
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      const [url, init] = fetchMock.mock.calls[0] as unknown as [
+        string,
+        { body: string },
+      ];
+      expect(url).toContain("/actions/speak");
+      expect(url).not.toContain("/actions/transfer");
+      expect(JSON.parse(init.body).payload).toContain("not available");
+    } finally {
+      // Leave the shared pilot row exactly as the rest of the suite expects it.
+      await updateBusiness(business.id, {
+        onboardingStep: "1",
+        subscriptionStatus: "not_started",
+        trialStartedAt: null,
+      });
+    }
+  });
+
+  it("still transfers during onboarding (steps 1–4), so verification calls work", async () => {
+    const fetchMock = stubTelnyxTransfer(true);
+    const res = await POST(signedRequest(buildEventBody()));
+    expect(res.status).toBe(200);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const [url] = fetchMock.mock.calls[0] as unknown as [string];
+    expect(url).toContain("/actions/transfer");
+  });
+});

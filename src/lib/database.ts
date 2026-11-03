@@ -229,6 +229,10 @@ const BUSINESS_ADDED_COLUMNS: ReadonlyArray<readonly [string, string]> = [
   // when assignedNumber IS NULL — there is deliberately no separate status
   // column (see src/lib/numbers-pool.ts).
   ["onboardingStep", "TEXT NOT NULL DEFAULT '1'"],
+  // One-shot stamp for the trial-ended owner email (see
+  // src/app/api/v1/telephony/telnyx/answer/route.ts). Nullable: every existing
+  // row means "not sent yet".
+  ["trialEndedEmailAt", "TEXT"],
 ];
 
 function migrateCallsTable(db: Database.Database): void {

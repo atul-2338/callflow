@@ -5,6 +5,7 @@ import { getBusinessById, getAllBusinesses, updateBusiness } from "./db";
 import { readSmtpConfig, sendOperatorAlertEmail } from "./email";
 import { isValidPoolNumber, normalizeOwnerPhone, usAreaCode } from "./phone";
 import type { Business } from "./types";
+import { normalizeEnvValue } from "./util";
 
 /**
  * File-based pool of CallFlow numbers — the ONLY source of per-business
@@ -153,6 +154,15 @@ export async function assignNumber(
   writePool(entries);
 
   await updateBusiness(businessId, { assignedNumber: preferred.number });
+
+  // Pool stock alert (brief Step 2): with 3 or fewer free numbers left, email the
+  // operator so the pool can be restocked before a signup finds it empty. The
+  // console line always fires; the email is best-effort and never throws.
+  const remaining = entries.filter((e) => e.status === "available").length;
+  if (remaining <= LOW_POOL_THRESHOLD) {
+    await alertPoolLowStock(remaining);
+  }
+
   return { assignedNumber: preferred.number, pending: false };
 }
 
@@ -287,6 +297,44 @@ export async function addNumbers(raw: string): Promise<AddNumbersResult> {
   }
   if (result.added.length) writePool(entries);
   return result;
+}
+
+/**
+ * Pool stock alert threshold from the brief: 3 or fewer free numbers means
+ * "email the admin to restock".
+ */
+const LOW_POOL_THRESHOLD = 3;
+
+/**
+ * Low-stock alert: ALWAYS a console.warn, plus a best-effort email to the
+ * operator address (LEADS_NOTIFY_EMAIL, falling back to the SMTP sender). Never
+ * throws — assigning a number must not fail because an alert could not be sent.
+ */
+async function alertPoolLowStock(remaining: number): Promise<void> {
+  console.warn(
+    `[numbers-pool] LOW STOCK — ${remaining} number(s) available in ${poolFilePath()}. ` +
+      "Add more numbers in /admin/numbers before the next signup finds the pool empty."
+  );
+  const config = readSmtpConfig();
+  if (!config) {
+    console.error(
+      "[numbers-pool] SMTP not configured — set SMTP_HOST/SMTP_PORT/SMTP_USER/SMTP_PASS/SMTP_FROM to also receive restock alerts by email."
+    );
+    return;
+  }
+  const to = normalizeEnvValue(process.env.LEADS_NOTIFY_EMAIL) || config.from;
+  const result = await sendOperatorAlertEmail(
+    config,
+    to,
+    `CallFlow: number pool low (${remaining} left)`,
+    `${remaining} CallFlow number(s) are still available in the pool.\n\n` +
+      "Restock from /admin/numbers (paste one number per line) so a new signup " +
+      "always receives a number immediately.\n\n" +
+      "— Callflow"
+  );
+  if (!result.sent) {
+    console.error(`[numbers-pool] Low-stock email not sent: ${result.error}`);
+  }
 }
 
 /**

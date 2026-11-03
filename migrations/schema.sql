@@ -143,6 +143,11 @@ CREATE TABLE IF NOT EXISTS businesses (
   setupTokenHash TEXT,
   setupTokenExpiry TEXT,
   setupTokenUsedAt TEXT,
+  -- One-shot stamp for the "your trial has ended" owner email: set the first
+  -- time a call arrives for a business whose trial is over and which has no
+  -- active subscription, so the message is never sent twice (see
+  -- src/app/api/v1/telephony/telnyx/answer/route.ts).
+  trialEndedEmailAt TEXT,
   createdAt TEXT NOT NULL,
   updatedAt TEXT NOT NULL
 );

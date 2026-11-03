@@ -1,12 +1,17 @@
 import { NextResponse } from "next/server";
-import { setBusinessForwardingStatus } from "@/lib/db";
+
+import { describeBillingAccess } from "@/lib/billing";
+import { setBusinessForwardingStatus, updateBusiness } from "@/lib/db";
 import { matchDograhBusiness } from "@/lib/dograh-webhook";
+import { readSmtpConfig, sendOperatorAlertEmail } from "@/lib/email";
 import {
   getTelnyxConfig,
   parseTelnyxEvent,
+  speakToCaller,
   transferCall,
   verifyTelnyxSignature,
 } from "@/lib/telnyx";
+import type { Business } from "@/lib/types";
 
 export const runtime = "nodejs";
 
@@ -39,6 +44,73 @@ export const runtime = "nodejs";
  *   ignores a duplicate command within 60 seconds, so a transfer that actually
  *   went through is never executed twice.
  */
+
+/**
+ * Whether inbound calls for this business should be BLOCKED (caller hears the
+ * unavailable message instead of the agent).
+ *
+ * Deliberately narrow: only a business that has FINISHED onboarding can be
+ * blocked. During steps 1–4 the call is how the owner verifies forwarding and
+ * how the trial clock starts, so gating there would break signup.
+ */
+function callsBlocked(business: Business): boolean {
+  if (business.onboardingStep !== "done") return false;
+  return !describeBillingAccess(business).entitled;
+}
+
+/**
+ * One line the caller hears when the business is no longer entitled. Short on
+ * purpose: it is spoken by Telnyx's TTS.
+ */
+const UNAVAILABLE_MESSAGE =
+  "This business is not available to take your call right now. Please try again later.";
+
+/**
+ * Best-effort "your trial has ended" owner email, sent ONCE per business (the
+ * trialEndedEmailAt stamp is written only after a successful send). Runs from
+ * after(), so it can never delay or fail the webhook response.
+ */
+async function sendTrialEndedEmail(business: Business): Promise<void> {
+  const to = business.notificationEmail?.trim() || business.billingEmail?.trim() || "";
+  if (!to) {
+    console.warn(
+      "[telnyx-answer] trial ended but this business has no email on file — owner not notified",
+      { businessId: business.id }
+    );
+    return;
+  }
+  const config = readSmtpConfig();
+  if (!config) {
+    console.error(
+      "[telnyx-answer] SMTP is not configured, so the trial-ended email was skipped."
+    );
+    return;
+  }
+  const name = business.billingName?.trim() || "your business";
+  const result = await sendOperatorAlertEmail(
+    config,
+    to,
+    "CallFlow: your free trial has ended",
+    `Hi ${name},\n\n` +
+      "your 3-day CallFlow trial has ended and calls to your CallFlow number are " +
+      "no longer answered by the agent.\n" +
+      "Callers now hear a short message asking them to try again later, so they " +
+      "never reach a dead line.\n\n" +
+      "To start answering calls again, subscribe for $49/month from your " +
+      "dashboard: https://callflow.biz/app\n\n" +
+      "— CallFlow"
+  );
+  if (result.sent) {
+    await updateBusiness(business.id, {
+      trialEndedEmailAt: new Date().toISOString(),
+    });
+    return;
+  }
+  console.error("[telnyx-answer] trial-ended email not sent", {
+    businessId: business.id,
+    error: result.error,
+  });
+}
 
 let warnedOnce = false;
 function warnIfPublicKeyUnconfigured() {
@@ -92,6 +164,42 @@ export async function POST(request: Request) {
     return new NextResponse("OK", { status: 200 });
   }
 
+  // Attribute the call BEFORE answering it: the dialled number must match a
+  // business's assignedNumber (the only rule). An unknown number is not gated —
+  // it is simply transferred, exactly as before.
+  const business = await matchDograhBusiness(event.to);
+
+  // Entitlement gate (see callsBlocked): a business whose trial has expired and
+  // which has no live subscription must NOT reach the AI agent. The caller hears
+  // a short "unavailable" message instead of a dead line. Fails open: if Telnyx
+  // rejects the speak command we still transfer, so a real caller is never
+  // stranded by a provider hiccup.
+  if (business && callsBlocked(business)) {
+    const spoke = await speakToCaller(
+      event.callControlId,
+      UNAVAILABLE_MESSAGE,
+      `unavailable-${event.eventId}`
+    );
+    if (spoke.ok) {
+      console.warn("[telnyx-answer] trial/subscription lapsed — agent not reached", {
+        businessId: business.id,
+        dialledNumber: event.to,
+      });
+      if (!business.trialEndedEmailAt) {
+        // One email per business: the stamp is written only after a successful
+        // send. Fire-and-forget so the response never waits on SMTP.
+        void sendTrialEndedEmail(business).catch((error) => {
+          console.error("[telnyx-answer] trial-ended email threw", error);
+        });
+      }
+      return new NextResponse("OK", { status: 200 });
+    }
+    console.error(
+      "[telnyx-answer] could not play the unavailable message — transferring anyway",
+      { businessId: business.id, error: spoke.error }
+    );
+  }
+
   const { forwardTo } = getTelnyxConfig();
   if (!forwardTo) {
     console.warn(
@@ -130,13 +238,11 @@ export async function POST(request: Request) {
     result: result.result,
   });
 
-  // Telnyx accepted the transfer — the owner's carrier forwarding demonstrably
-  // works end to end. Attribute the call via matchDograhBusiness (the dialled
-  // DID must equal the business's assignedNumber — the only match rule) and
-  // confirm that specific business's forwarding. An unattributed call flips
-  // nothing. If the DB write itself throws, the handler answers 500 and
-  // Telnyx's redelivery retries it.
-  const business = await matchDograhBusiness(event.to);
+  // The transfer was accepted, so the owner's carrier forwarding demonstrably
+  // works end to end: confirm that specific business's forwarding. An
+  // unattributed call flips nothing (it was matched above, before the gate).
+  // If the DB write itself throws, the handler answers 500 and Telnyx's
+  // redelivery retries it.
   if (business) {
     await setBusinessForwardingStatus(
       business.id,

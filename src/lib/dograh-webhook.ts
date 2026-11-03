@@ -78,9 +78,8 @@ export async function matchDograhBusiness(calledNumber: string) {
   console.warn(
     `[dograh-webhook] No business owns the dialled number "${
       calledNumber || "(missing)"
-    }" (matched against assignedNumber — the only rule). The call is still ` +
-      "recorded: it is stored unlinked (businessId NULL) and shows up under " +
-      '/admin/calls → "Unlinked only" until a number is assigned to a business.'
+    }" (matched against assignedNumber — the only rule). Assign that number to ` +
+      "a business from the pool (/admin/numbers) to attribute its calls."
   );
   return null;
 }
