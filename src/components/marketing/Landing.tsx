@@ -5,6 +5,7 @@ import {
   DEMO_AUDIO_SRC,
   DEMO_PHONE_DISPLAY,
   DEMO_PHONE_TEL,
+  DEMO_VIDEO_SRC,
 } from "@/lib/siteConfig";
 import {
   ArrowRight,
@@ -199,7 +200,8 @@ function Hero() {
 function HearIt() {
   const hasPhone = DEMO_PHONE_DISPLAY !== "" && DEMO_PHONE_TEL !== "";
   const hasAudio = DEMO_AUDIO_SRC !== "";
-  if (!hasPhone && !hasAudio) return null;
+  const hasVideo = DEMO_VIDEO_SRC !== "";
+  if (!hasPhone && !hasAudio && !hasVideo) return null;
 
   return (
     <section className="mx-auto w-full max-w-3xl px-4 pb-16 text-center sm:px-6">
@@ -218,6 +220,20 @@ function HearIt() {
           Call the demo: {DEMO_PHONE_DISPLAY}
           <Phone className="h-4 w-4" />
         </a>
+      )}
+      {hasVideo && (
+        <div className="mt-8">
+          <video
+            controls
+            playsInline
+            preload="metadata"
+            src={DEMO_VIDEO_SRC}
+            className="mx-auto w-full max-w-2xl rounded-2xl shadow-lg"
+          />
+          <p className="mt-2 text-xs text-white/70">
+            Watch a real missed call get answered (about 20 seconds)
+          </p>
+        </div>
       )}
       {hasAudio && (
         <div className="mt-8">
