@@ -3,6 +3,7 @@ import os from "os";
 import path from "path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import {
+  deliverOwnerEmail,
   deliverOwnerPush,
   handleDograhWebhook,
   type OwnerPushPlan,
@@ -459,5 +460,95 @@ describe("business matching — assignedNumber (per-business DID)", () => {
     expect(row).not.toBeNull();
     expect(row!.businessId).toBeNull();
     warn.mockRestore();
+  });
+});
+
+describe("new-call email alert (brief step 4)", () => {
+  it("builds an alert for a new attributed call and never on redelivery", async () => {
+    const { updateBusiness } = await import("./db");
+    const { getBusinessByPhone } = await import("./db");
+    const sole = await getBusinessByPhone("+15550001111");
+    const business = await updateBusiness(sole!.id, {
+      notificationEmail: "owner@example.com",
+    });
+
+    const created = await fire({ callId: "alert-email-1", duration: "42" });
+    expect(business?.notificationEmail).toBe("owner@example.com");
+    expect(created.alertPlan).not.toBeNull();
+    expect(created.alertPlan!.to).toBe("owner@example.com");
+    expect(created.alertPlan!.input.outcome).toBe("answered (42s)");
+    expect(created.alertPlan!.input.callbackNumber).toBe("+15550000123");
+    expect(created.alertPlan!.input.dashboardUrl).toMatch(/\/app$/);
+
+    // A redelivery of the same callId must not re-notify the owner.
+    const replay = await fire({ callId: "alert-email-1" });
+    expect(replay.alertPlan).toBeNull();
+
+    // An unlinked call has no owner to email.
+    const unlinked = await fire({
+      callId: "alert-email-unlinked",
+      called_number: "+19995550000",
+    });
+    expect(unlinked.alertPlan).toBeNull();
+
+    // Restore the shared row so later suites see no alert address.
+    await updateBusiness(business!.id, { notificationEmail: null });
+  });
+
+  it("deliverOwnerEmail skips quietly when SMTP is not configured", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const send = vi.fn(async () => ({ sent: true }));
+    await deliverOwnerEmail(
+      {
+        to: "owner@example.com",
+        input: {
+          name: "Priya",
+          urgency: null,
+          reason: null,
+          callbackNumber: null,
+          startedAt: new Date().toISOString(),
+          recordingUrl: null,
+          dashboardUrl: "https://callflow.biz/app",
+        },
+      },
+      send as never
+    );
+    expect(send).not.toHaveBeenCalled();
+    expect(
+      warn.mock.calls.some((call) => String(call[0]).includes("email skipped"))
+    ).toBe(true);
+    warn.mockRestore();
+  });
+
+  it("deliverOwnerEmail sends through the transport once SMTP is configured", async () => {
+    vi.stubEnv("SMTP_HOST", "smtp.test.local");
+    vi.stubEnv("SMTP_PORT", "587");
+    vi.stubEnv("SMTP_USER", "u");
+    vi.stubEnv("SMTP_PASS", "p");
+    vi.stubEnv("SMTP_FROM", "Callflow <a@t.local>");
+    try {
+      const send = vi.fn(async () => ({ sent: true, messageId: "m-1" }));
+      const plan = {
+        to: "owner@example.com",
+        input: {
+          name: "Priya",
+          urgency: null,
+          reason: null,
+          callbackNumber: "+15550000123",
+          startedAt: new Date().toISOString(),
+          recordingUrl: null,
+          dashboardUrl: "https://callflow.biz/app",
+        },
+      };
+      await deliverOwnerEmail(plan, send as never);
+      expect(send).toHaveBeenCalledTimes(1);
+      expect(send).toHaveBeenCalledWith(
+        expect.objectContaining({ host: "smtp.test.local", port: 587 }),
+        "owner@example.com",
+        plan.input
+      );
+    } finally {
+      vi.unstubAllEnvs();
+    }
   });
 });

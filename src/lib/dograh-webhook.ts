@@ -14,7 +14,14 @@ import {
   webhookSecret,
   type HeaderReader,
 } from "./dograh";
+import {
+  readSmtpConfig,
+  sendCallAlertEmail,
+  smtpConfigError,
+  type CallAlertEmailInput,
+} from "./email";
 import { sendPushNotification, type NotifyMissedCallResult } from "./firebase";
+import { normalizeEnvValue } from "./util";
 import { CALL_STATUSES, type CallStatus } from "./types";
 
 /**
@@ -33,6 +40,8 @@ export interface DograhWebhookResult {
   callId?: string;
   /** Set on 200s for NEW calls; the route runs it via after(). */
   pushPlan: OwnerPushPlan | null;
+  /** Set on 200s for NEW, ATTRIBUTED calls with an owner email; after() too. */
+  alertPlan: OwnerAlertPlan | null;
   /** True when this request inserted a row (false = updated an existing one). */
   created: boolean;
 }
@@ -43,6 +52,46 @@ export interface OwnerPushPlan {
   title: string;
   body: string;
   data: Record<string, string>;
+}
+
+/** Everything deliverOwnerEmail needs to send the owner's call alert. */
+export interface OwnerAlertPlan {
+  to: string;
+  input: CallAlertEmailInput;
+}
+
+/** Absolute CTA URL for the email (PUBLIC_BASE_URL, else the live host). */
+function dashboardUrl(): string {
+  const base = (
+    normalizeEnvValue(process.env.PUBLIC_BASE_URL) || "https://callflow.biz"
+  ).replace(/\/+$/, "");
+  return `${base}/app`;
+}
+
+/**
+ * Send the owner's call alert — runs AFTER the 200 response (the route
+ * schedules it with after()). NOTHING here may fail the request: a missing SMTP
+ * configuration or a transport error is logged and dropped.
+ */
+export async function deliverOwnerEmail(
+  plan: OwnerAlertPlan,
+  send: typeof sendCallAlertEmail = sendCallAlertEmail
+): Promise<void> {
+  const config = readSmtpConfig();
+  if (!config) {
+    console.warn(
+      `[dograh-webhook] Call alert email skipped: ${smtpConfigError()}`
+    );
+    return;
+  }
+  const result = await send(config, plan.to, plan.input);
+  if (!result.sent) {
+    console.warn(
+      `[dograh-webhook] Call alert email not delivered (${
+        result.error ?? "unknown error"
+      }).`
+    );
+  }
 }
 
 const PUSH_TITLES: Record<CallStatus, string> = {
@@ -119,6 +168,7 @@ export async function handleDograhWebhook(opts: {
       status: 401,
       body: { error: "unauthorized" },
       pushPlan: null,
+      alertPlan: null,
       created: false,
     };
   }
@@ -130,6 +180,7 @@ export async function handleDograhWebhook(opts: {
       status: 400,
       body: { error: "request body must be valid JSON" },
       pushPlan: null,
+      alertPlan: null,
       created: false,
     };
   }
@@ -141,6 +192,7 @@ export async function handleDograhWebhook(opts: {
       status: 400,
       body: { error: "callId is required" },
       pushPlan: null,
+      alertPlan: null,
       created: false,
     };
   }
@@ -223,11 +275,45 @@ export async function handleDograhWebhook(opts: {
     }
   }
 
+  // 7. Owner EMAIL alert (brief Step 4) — one short summary per NEW, ATTRIBUTED
+  //    call, sent to the business's alert address (notificationEmail, then
+  //    billing email). Replays never re-send and an unlinked call has no owner.
+  //    The route sends it with after(), so SMTP can never delay or fail the 200.
+  let alertPlan: OwnerAlertPlan | null = null;
+  if (created && business) {
+    const to =
+      business.notificationEmail?.trim() || business.billingEmail?.trim() || "";
+    if (to) {
+      const status = toCallStatus(payload.status);
+      alertPlan = {
+        to,
+        input: {
+          name: payload.customerName || payload.callerNumber || "Unknown caller",
+          urgency: null,
+          reason: null,
+          callbackNumber: payload.callerNumber || null,
+          startedAt: new Date().toISOString(),
+          recordingUrl: null,
+          outcome:
+            payload.durationSeconds === null
+              ? status
+              : `${status} (${payload.durationSeconds}s)`,
+          dashboardUrl: dashboardUrl(),
+        },
+      };
+    } else {
+      console.warn(
+        "[dograh-webhook] Call alert email skipped: this business has no notification or billing email on file."
+      );
+    }
+  }
+
   return {
     status: 200,
     body: { ok: true },
     callId: payload.callId,
     pushPlan,
+    alertPlan,
     created,
   };
 }

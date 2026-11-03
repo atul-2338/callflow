@@ -1,6 +1,10 @@
 import { after } from "next/server";
 import { NextResponse } from "next/server";
-import { deliverOwnerPush, handleDograhWebhook } from "@/lib/dograh-webhook";
+import {
+  deliverOwnerEmail,
+  deliverOwnerPush,
+  handleDograhWebhook,
+} from "@/lib/dograh-webhook";
 
 /**
  * Receives Dograh workflow "send webhook" deliveries at end of call.
@@ -47,6 +51,11 @@ export async function POST(request: Request) {
       const plan = result.pushPlan;
       // Push runs after the response is flushed — the caller gets {"ok":true} fast.
       after(() => deliverOwnerPush(plan));
+    }
+    if (result.alertPlan) {
+      const plan = result.alertPlan;
+      // Same for the owner email: SMTP latency never touches the webhook reply.
+      after(() => deliverOwnerEmail(plan));
     }
     return NextResponse.json(result.body, { status: result.status });
   } catch (error) {

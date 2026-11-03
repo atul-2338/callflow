@@ -71,6 +71,8 @@ export interface CallAlertEmailInput {
   reason: string | null;
   /** Number to call back (callback number or caller number), or null. */
   callbackNumber: string | null;
+  /** How the agent handled the call, e.g. "answered (184s)"; optional. */
+  outcome?: string | null;
   /** ISO timestamp of when the call started. */
   startedAt: string;
   /** Dograh recording URL, or null when there is none. */
@@ -123,11 +125,13 @@ export function buildCallAlertEmail(input: CallAlertEmailInput): {
   const tel = telHref(callback);
   const reason = input.reason?.trim() || "(not captured)";
   const recording = input.recordingUrl?.trim() || "";
+  const outcome = input.outcome?.trim() || "";
 
   const textLines = [
     `You have a new call from your Callflow agent (${name}).`,
     ``,
     `What they need: ${reason}`,
+    outcome ? `Outcome: ${outcome}` : null,
     callback ? `Call them back: ${callback}` : null,
     `Call time: ${time}`,
     recording ? `Listen to the recording: ${recording}` : null,
@@ -142,6 +146,7 @@ export function buildCallAlertEmail(input: CallAlertEmailInput): {
   const htmlLines = [
     `<p>You have a new call from your Callflow agent (${escapeHtml(name)}).</p>`,
     `<p><strong>What they need:</strong> ${escapeHtml(reason)}</p>`,
+    outcome ? `<p><strong>Outcome:</strong> ${escapeHtml(outcome)}</p>` : null,
     htmlCallback ? `<p><strong>Call them back:</strong> ${htmlCallback}</p>` : null,
     `<p><strong>Call time:</strong> ${escapeHtml(time)}</p>`,
     recording
