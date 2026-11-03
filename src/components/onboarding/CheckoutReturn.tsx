@@ -67,16 +67,27 @@ export default function CheckoutReturn() {
 
   const check = useCallback(async () => {
     // Dodo's query params are read inside this client-only callback (never
-    // during render), so server and client markup stay identical. The
-    // redirect's `session_id` also travels in the POST body: it lets the
-    // server bind the checkout-bound signup handoff cookie to the exact
-    // checkout Dodo redirected us back from.
+    // during render), so server and client markup stay identical. All of them
+    // travel in the POST body: `session_id` (when present) lets the server bind
+    // our records to the exact checkout Dodo redirected us back from, the
+    // signed `trial_id` we put on the return URL identifies the account even
+    // when the browser dropped our cookies on the cross-site trip back, and
+    // `subscription_id` is what Dodo actually appends on success — the server
+    // only trusts it after asking Dodo's API who owns that subscription.
     const params = new URLSearchParams(window.location.search);
+    // Tolerate a redirect that pastes its own query onto ours with a second
+    // "?" (`...?trial_id=<token>?status=success&session_id=...`): the token is
+    // base64url plus a dot, so anything after a "?" is not part of it.
+    const trialId = params.get("trial_id")?.split("?")[0] || null;
     const response = await fetch("/api/billing/confirm", {
       method: "POST",
       cache: "no-store",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ checkoutSessionId: params.get("session_id") }),
+      body: JSON.stringify({
+        checkoutSessionId: params.get("session_id"),
+        subscriptionId: params.get("subscription_id"),
+        trialId,
+      }),
     });
 
     setAttemptedSessionId(params.get("session_id"));
@@ -204,11 +215,17 @@ export default function CheckoutReturn() {
     return (
       <Shell
         tone="warning"
-        title="We can't match this browser to your checkout"
-        body="Dodo sent you back to us, but the trial session cookie isn't in this browser. Finish checkout in the same tab or device you started it from, or sign up again below."
+        title="We can't match this checkout to an account"
+        body="Dodo sent you back, but this return link does not match a CallFlow account we can verify. It may belong to an earlier checkout attempt, or the payment was started for a different account. If you were charged, sign in with your email and your plan will sync from Dodo; otherwise start again below."
       >
         <Link href="/onboarding" className="ios-pill-primary w-full px-4 py-3.5 text-[15px]">
           Back to signup
+        </Link>
+        <Link
+          href="/login"
+          className="mt-3 inline-flex w-full items-center justify-center rounded-full border border-separator px-4 py-3 text-[15px] font-medium text-ink-2 hover:bg-black/[0.03]"
+        >
+          Sign in instead
         </Link>
       </Shell>
     );

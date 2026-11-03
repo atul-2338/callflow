@@ -11,9 +11,11 @@ import type {
   ContactStatus,
   FollowUpStatus,
   ForwardingStatus,
+  Lead,
+  LeadStatus,
   Settings,
 } from "./types";
-import { CALL_OUTCOMES, FOLLOW_UP_STATUSES } from "./types";
+import { CALL_OUTCOMES, FOLLOW_UP_STATUSES, LEAD_STATUSES } from "./types";
 import { getDb } from "./database";
 import { generateClientUid } from "./util";
 
@@ -954,6 +956,72 @@ export async function getWaitlistSignups(): Promise<WaitlistSignup[]> {
   return getDb()
     .prepare("SELECT * FROM waitlist ORDER BY createdAt DESC")
     .all() as unknown as WaitlistSignup[];
+}
+
+// ---- Post-demo leads (public /start → POST /api/leads) ----
+
+type LeadRow = Omit<Lead, "status"> & { status: string };
+
+/** Unknown statuses fall back to "new" rather than leaking a bad enum to the UI. */
+function mapLead(row: LeadRow): Lead {
+  return {
+    ...row,
+    status: LEAD_STATUSES.includes(row.status as LeadStatus)
+      ? (row.status as LeadStatus)
+      : "new",
+  };
+}
+
+export interface NewLeadInput {
+  name: string;
+  /** Owner-entered number, already normalized to E.164 by the caller. */
+  phone: string;
+  email: string;
+}
+
+/**
+ * Record a lead submitted on the public /start page. No dedupe: two different
+ * people may share a phone or an address, and every submission is a real
+ * prospect the admin should see — unlike the waitlist, which is per-email.
+ */
+export async function createLead(input: NewLeadInput): Promise<Lead> {
+  const now = new Date().toISOString();
+  const lead: Lead = {
+    id: randomUUID(),
+    name: input.name.trim(),
+    phone: input.phone.trim(),
+    email: input.email.trim().toLowerCase(),
+    status: "new",
+    createdAt: now,
+    updatedAt: now,
+  };
+  getDb()
+    .prepare(
+      `INSERT INTO leads (id, name, phone, email, status, createdAt, updatedAt)
+       VALUES (@id, @name, @phone, @email, @status, @createdAt, @updatedAt)`
+    )
+    .run(lead);
+  return lead;
+}
+
+export async function getLeadById(id: string): Promise<Lead | null> {
+  const row = getDb().prepare("SELECT * FROM leads WHERE id = ?").get(id) as
+    | LeadRow
+    | undefined;
+  return row ? mapLead(row) : null;
+}
+
+/**
+ * Move a lead along new → contacted → account_created → dead (admin Leads tab).
+ * Returns null when the id does not exist, so the route can answer 404 instead
+ * of pretending the update landed.
+ */
+export async function setLeadStatus(id: string, status: LeadStatus): Promise<Lead | null> {
+  const info = getDb()
+    .prepare("UPDATE leads SET status = @status, updatedAt = @now WHERE id = @id")
+    .run({ id, status, now: new Date().toISOString() });
+  if (info.changes !== 1) return null;
+  return getLeadById(id);
 }
 
 // ---- SMS forwarding verification (Phase 5) ----

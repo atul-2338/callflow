@@ -5,7 +5,7 @@ import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vites
 import { resetRateLimits } from "@/lib/rate-limit";
 import { closeDb } from "@/lib/database";
 import { createBusiness, getBusinessByPhone } from "@/lib/db";
-import { verifySignupHandoffToken } from "@/lib/signup-handoff";
+import { verifyCheckoutReturnToken, verifySignupHandoffToken } from "@/lib/signup-handoff";
 import { POST } from "./route";
 
 // The signup route calls the Dodo SDK through getDodoClient(); swap it for
@@ -152,6 +152,17 @@ describe("POST /api/billing/signup", () => {
     expect(body.checkoutUrl).toBe("https://checkout.dodo.test/pay/cs_seq_2");
     // The row now carries the checkout session the handoff binds to.
     expect(stored!.dodoCheckoutSessionId).toBe("cs_seq_2");
+
+    // The return URL Dodo sends the browser back to carries a signed account
+    // id, so the return page can identify this business even when the browser
+    // drops our cookies on the cross-site trip.
+    const returnUrl = new URL(
+      (dodoMocks.checkoutCreate.mock.calls[0][0] as { return_url: string }).return_url
+    );
+    expect(`${returnUrl.origin}${returnUrl.pathname}`).toBe(
+      "https://callflow.test/checkout/return"
+    );
+    expect(verifyCheckoutReturnToken(returnUrl.searchParams.get("trial_id"))).toBe(stored!.id);
 
     const cookies = response.headers.getSetCookie();
     expect(cookieNames(response)).not.toContain("callflow_business_session");

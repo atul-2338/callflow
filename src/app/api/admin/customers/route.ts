@@ -10,9 +10,12 @@
  * E.164 exactly as onboarding normalizes it.
  *
  * Creation lives in src/lib/admin-customers.ts (one SQLite transaction) and
- * starts the 3-day trial with no payment. The response carries the one-time
- * login link for the admin to copy; the link (and its token) is NEVER written
- * to the audit trail — only its expiry is.
+ * starts the 3-day trial with no payment. Two links come back and both are
+ * handed to the owner: the one-time LOGIN link (src/app/owner-login/route.ts)
+ * and a 48-hour password-SETUP link, which is emailed to the owner here (best
+ * effort — SMTP trouble never fails the creation) and also returned as
+ * `setupUrl` so the admin can pass it on by hand. Neither link, nor either
+ * token, is ever written to the audit trail — only their expiries are.
  */
 import { NextResponse } from "next/server";
 
@@ -26,6 +29,8 @@ import {
 } from "@/lib/admin-customers";
 import { requireAdminApi } from "@/lib/admin-session";
 import { BUSINESS_NAME_TAKEN_ERROR, BusinessNameTakenError } from "@/lib/billing";
+import { setupPasswordUrl } from "@/lib/business-password";
+import { readSmtpConfig, sendOperatorAlertEmail, type EmailSendResult } from "@/lib/email";
 import { isValidPoolNumber, normalizeOwnerPhone } from "@/lib/phone";
 import { clientIp, rateLimit } from "@/lib/rate-limit";
 
@@ -35,6 +40,52 @@ const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 function badRequest(message: string): NextResponse {
   return NextResponse.json({ error: message }, { status: 400 });
+}
+
+/**
+ * Emails the password-setup link to the new owner.
+ *
+ * Best-effort by design: the business row is already committed, so a mail
+ * failure must never turn a successful creation into an error. The link is also
+ * returned to the admin in the response (setupUrl), so a missed email is
+ * recoverable by hand — and the owner can always sign in with the login link.
+ *
+ * Sent through the existing nodemailer/SMTP setup (src/lib/email.ts) — the same
+ * transport the call alerts already use. Resend is not installed in this repo
+ * and no RESEND_API_KEY is configured.
+ */
+async function sendOwnerSetupLinkEmail(args: {
+  to: string;
+  ownerName: string;
+  businessName: string;
+  url: string;
+}): Promise<EmailSendResult> {
+  const config = readSmtpConfig();
+  if (!config) {
+    console.error(
+      "[admin-customers] SMTP not configured — the owner setup link was NOT emailed. " +
+        "Copy setupUrl from this response and send it another way (see .env.example)."
+    );
+    return { sent: false, error: "SMTP not configured" };
+  }
+
+  const firstName = args.ownerName.trim().split(/\s+/)[0] || "there";
+  const result = await sendOperatorAlertEmail(
+    config,
+    args.to,
+    "Your CallFlow account is ready",
+    `Hi ${firstName},\n\n` +
+      `your CallFlow account is set up. Create your password here:\n` +
+      `${args.url}\n\n` +
+      `This link expires in 48 hours.\n\n` +
+      `If it expires, ask your CallFlow contact for a new one — you can also sign\n` +
+      `in any time with the login link you were given.\n\n` +
+      `— CallFlow`
+  );
+  if (!result.sent) {
+    console.error(`[admin-customers] setup email not sent: ${result.error}`);
+  }
+  return result;
 }
 
 export async function POST(request: Request): Promise<NextResponse> {
@@ -83,25 +134,42 @@ export async function POST(request: Request): Promise<NextResponse> {
   }
 
   try {
-    const { business, loginToken, loginTokenExpiresAt, trialEndsAt } =
-      await createAdminCustomer({
-        businessName,
-        ownerName,
-        ownerEmail,
-        ownerPhone,
-        assignedNumber,
-      });
+    const {
+      business,
+      loginToken,
+      loginTokenExpiresAt,
+      setupToken,
+      setupTokenExpiresAt,
+      trialEndsAt,
+    } = await createAdminCustomer({
+      businessName,
+      ownerName,
+      ownerEmail,
+      ownerPhone,
+      assignedNumber,
+    });
+
+    // Emailed immediately; a failure only logs (see sendOwnerSetupLinkEmail).
+    const setupUrl = setupPasswordUrl(requestOrigin(request), setupToken);
+    const setupEmail = await sendOwnerSetupLinkEmail({
+      to: ownerEmail,
+      ownerName,
+      businessName,
+      url: setupUrl,
+    });
 
     logAdminAction({
       action: "customer_created",
       target: business.id,
-      // Ids and keys only — never the login link or its token.
+      // Ids and keys only — never the login link, the setup link or either token.
       details: {
         businessName: business.billingName,
         clientUid: business.clientUid,
         assignedNumber: business.assignedNumber,
         trialEndsAt,
         loginTokenExpiresAt,
+        setupTokenExpiresAt,
+        setupEmailSent: setupEmail.sent,
       },
       ip: clientIp(request),
     });
@@ -122,6 +190,11 @@ export async function POST(request: Request): Promise<NextResponse> {
         trialEndsAt,
         loginUrl: ownerLoginUrl(requestOrigin(request), loginToken),
         loginTokenExpiresAt,
+        // The password-setup link, for the copy-paste fallback when SMTP is
+        // down (setupEmailSent says which case this was).
+        setupUrl,
+        setupTokenExpiresAt,
+        setupEmailSent: setupEmail.sent,
       },
       { status: 201 }
     );

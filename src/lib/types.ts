@@ -209,3 +209,29 @@ export interface Business {
   createdAt: string;
   updatedAt: string;
 }
+
+/**
+ * Post-demo lead intake (public /start page → POST /api/leads), worked from the
+ * admin panel's Leads tab (/admin/leads). `status` moves along
+ * new → contacted → account_created → dead; nothing else transitions it.
+ */
+export const LEAD_STATUSES = [
+  "new",
+  "contacted",
+  "account_created",
+  "dead",
+] as const;
+
+export type LeadStatus = (typeof LEAD_STATUSES)[number];
+
+export interface Lead {
+  id: string;
+  name: string;
+  /** Callback number exactly as submitted (E.164 after normalization). */
+  phone: string;
+  /** Lowercased on write, like every other email in this schema. */
+  email: string;
+  status: LeadStatus;
+  createdAt: string;
+  updatedAt: string;
+}

@@ -24,6 +24,8 @@ import { resetRateLimits } from "@/lib/rate-limit";
 import { POST as numbersPOST } from "./numbers/route";
 import { POST as releasePOST } from "./numbers/release/route";
 import { POST as assignPOST } from "./businesses/[id]/assign/route";
+import { GET as leadsGET } from "./leads/route";
+import { PATCH as leadsPATCH } from "./leads/[id]/route";
 import { POST as loginPOST } from "./login/route";
 import { POST as logoutPOST } from "./logout/route";
 
@@ -112,5 +114,30 @@ describe("admin API guard safety (real requireAdminApi)", () => {
     const response = await loginPOST(loginRequest("{not-json"));
     expect(response.status).toBe(401);
     expect(((await response.json()) as { error: string }).error).toMatch(/invalid credentials/i);
+  });
+
+  it("401s on the leads routes without a cookie and with only an owner session", async () => {
+    const leadsContext = { params: Promise.resolve({ id: "lead-1" }) };
+    const leadsPatch = (cookie?: string) =>
+      new Request("http://localhost:3000/api/admin/leads/lead-1", {
+        method: "PATCH",
+        headers: {
+          "content-type": "application/json",
+          ...(cookie ? { cookie } : {}),
+        },
+        body: JSON.stringify({ status: "contacted" }),
+      });
+    const leadsGet = (cookie?: string) =>
+      new Request("http://localhost:3000/api/admin/leads", {
+        method: "GET",
+        headers: cookie ? { cookie } : {},
+      });
+
+    expect((await leadsGET(leadsGet())).status).toBe(401);
+    expect((await leadsPATCH(leadsPatch(), leadsContext)).status).toBe(401);
+
+    const cookie = ownerCookie();
+    expect((await leadsGET(leadsGet(cookie))).status).toBe(401);
+    expect((await leadsPATCH(leadsPatch(cookie), leadsContext)).status).toBe(401);
   });
 });

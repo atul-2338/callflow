@@ -22,6 +22,42 @@ order (inferred) — owner to confirm or correct.*
 
 ## NOW (MVP — one at a time, show result, wait for "next")
 
+0. **Owner auth / password brief — ALL NINE DELIVERABLES BUILT (2026-10-29), nothing
+   committed yet.** The flow end-to-end: admin-created account → emailed one-time
+   setup link → owner picks a password → email + password sign-in → 3-day trial →
+   trial banner → paywall → `/account` password change → public `/start` lead
+   intake → admin Leads tab. Deliverables 1–4 + 6 landed 2026-10-27; this pass
+   added 5, 7, 8, 9:
+   - **5 — trial banner + paywall.** `src/components/billing/BillingNotice.tsx`
+     on `/app`, with the state resolved SERVER-side by `describeBillingAccess()`
+     (src/lib/billing.ts) + `daysUntil()` (new `src/lib/billing-display.ts`, so no
+     component calls `Date.now()` during render). `POST /api/billing/checkout`
+     mints a fresh single-use Dodo hosted-checkout URL on every click — the
+     brief's `DODO_CHECKOUT_URL` env premise does not exist in this repo.
+     A lapsed business that still has `dodoSubscriptionId` is sent to the Dodo
+     portal instead (409 from checkout). `src/lib/billing.ts` and
+     `src/lib/dodo.ts` are imported READ-ONLY — byte-identical.
+   - **7 — `/account` + change password.** `src/app/(app)/account/page.tsx`
+     (proxy-gated, resolves the session itself), new "Account" item in the owner
+     nav, `ChangePasswordForm` + `POST /api/auth/change-password` (scrypt via
+     business-password.ts; the current password is required when one exists, and
+     an owner who has only ever used a login link can set one).
+   - **8 — `/start` + `POST /api/leads`.** Public post-demo intake (name, phone,
+     email), validated + IP rate-limited, saved to `leads` as `new`, and the
+     operator is emailed over the EXISTING nodemailer/SMTP transport
+     (`LEADS_NOTIFY_EMAIL`, falling back to `SMTP_FROM`; a mail failure still
+     saves the lead).
+   - **9 — admin Leads tab.** `/admin/leads` + `GET /api/admin/leads` +
+     `PATCH /api/admin/leads/[id]` (new → contacted → account_created → dead,
+     admin cookie only, audit-logged).
+   Gates: `npm test` 380/380 (43 files, +36 new), `npx tsc --noEmit` clean,
+   `npm run lint` 0 errors (16 pre-existing warnings), `npm run build` exit 0 with
+   every new route in the table.
+   **Owner decisions open:** (a) commit (explicit paths) and/or deploy;
+   (b) `/api/auth/login`'s 409 `NOT_SET_UP_ERROR` is a mild account-existence
+   oracle — genericize both cases?; (c) `/start` is shared by hand (nothing links
+   to it in-app); (d) set `LEADS_NOTIFY_EMAIL` in `/srv/callflow/.env`?
+   First command: `git status --short` — all of it is uncommitted.
 1. **Step 2 — Admin panel Phase 6: finish the live test.** Env vars +
    deploy already shipped (b7737fb, 2026-10-26; `/admin` renders the
    sign-in form — the fail-closed 404 did not trigger). Remaining:
@@ -95,7 +131,51 @@ order (inferred) — owner to confirm or correct.*
     (never committed per rules).
 
 ## DONE
+- **2026-10-29** — **Dodo checkout return no longer depends on a browser
+  cookie.** Diagnosis: `DODO_PAYMENTS_RETURN_URL` is fixed at session-creation
+  time, the handoff cookie is `SameSite=None; Secure` (correct) but browsers
+  still drop it on the cross-site trip back from Dodo, and the redirect's
+  `session_id` had to match `businesses.dodoCheckoutSessionId` exactly. Fix: the
+  return URL now carries a signed `trial_id` (HMAC over
+  `BUSINESS_SESSION_SECRET`, its own domain key
+  `callflow-checkout-return:v1`, 24 h TTL) minted by `withCheckoutReturnParam()`
+  in `src/lib/signup-handoff.ts` and appended by both checkout creators
+  (`createBillingSignup` in `src/lib/billing.ts` and
+  `POST /api/billing/checkout`). The return page posts it as `trialId`;
+  `/api/billing/confirm` treats it as a third proof (session cookie → handoff
+  cookie → URL token → legacy `session_id` DB lookup), binds it to the row's
+  current `dodoCheckoutSessionId` (a disagreeing redirect `session_id` is a
+  401), and still mints a session ONLY after the verified webhook has linked a
+  subscription. Cookie path unchanged; error copy reworded ("can't match this
+  browser") + "Sign in instead". Gates: `tsc` 0, eslint 0 errors (2
+  pre-existing warnings), `vitest` **392/392** (12 new tests), `build` exit 0.
+  Not committed, not deployed.
 
+
+- **2026-10-29** — **Owner-auth brief FINISHED: deliverables 5 (trial banner +
+  paywall), 7 (`/account` + change password), 8 (`/start` + `POST /api/leads`),
+  9 (admin Leads tab).** New files/changes: `src/components/billing/BillingNotice.tsx`
+  (banner + paywall, server-computed state), `src/lib/billing-display.ts`
+  (`daysUntil`), `POST /api/billing/checkout` (per-click single-use Dodo checkout
+  URL; 409 to the portal when a subscription already exists), `/account` +
+  `ChangePasswordForm` + `POST /api/auth/change-password` (scrypt, current
+  password verified when set) + "Account" nav item, public `/start` +
+  `StartForm` + `POST /api/leads` (SMTP operator alert, best-effort),
+  `/admin/leads` + `LeadStatusSelect` + `GET /api/admin/leads` +
+  `PATCH /api/admin/leads/[id]` (audit-logged) + "Leads" nav item, `src/lib/db.ts`
+  lead helpers (`createLead` / `getLeadById` / `setLeadStatus`), `src/lib/admin-db.ts`
+  `adminListLeads`, `src/lib/types.ts` (`Lead`, `LEAD_STATUSES`),
+  `src/lib/business-password.ts` (`getBusinessPasswordHash`,
+  `storeBusinessPassword`), `.env.example` (`LEADS_NOTIFY_EMAIL`), `/app`
+  reworked to gate the dashboard on `describeBillingAccess().entitled`; 4 new
+  test files + leads 401s added to `guard-safety.test.ts`.
+  Gates: tests 380/380 (43 files), tsc clean, eslint 0 errors (16 pre-existing
+  warnings), `npm run build` exit 0. Protected surface untouched:
+  `src/lib/business-session.ts`, `src/lib/billing.ts`, `src/lib/dodo.ts`,
+  `src/app/api/webhooks/**`. Nothing committed.
+  Stack deviations (owner-approved earlier): scrypt not bcrypt, existing HMAC
+  session cookie not JWT, nodemailer/SMTP not Resend, `src/proxy.ts` not
+  `middleware.ts` (Next 16 rename).
 - **2026-10-28** — **Deployed the admin create-customer work: LIVE at `bb338ab`.**
   Owner-approved `deploy.md` run. Feature commit `6fd29c9`, docs commit
   `bb338ab`, pushed `e815fbb..bb338ab`. Detached VPS run logged to

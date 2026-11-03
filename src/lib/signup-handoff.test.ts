@@ -1,15 +1,21 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  checkoutReturnParamName,
   clearSignupHandoffCookie,
+  createCheckoutReturnToken,
   createSignupHandoffToken,
   signupHandoffCookie,
   signupHandoffCookieName,
   signupHandoffFromCookieHeader,
+  verifyCheckoutReturnToken,
   verifySignupHandoffToken,
+  withCheckoutReturnParam,
 } from "./signup-handoff";
 
 const TEST_SECRET = "signup-handoff-test-secret";
 const THIRTY_MINUTES_MS = 30 * 60 * 1000;
+const TWENTY_FOUR_HOURS_MS = 24 * 60 * 60 * 1000;
+const RETURN_URL = "https://callflow.test/checkout/return";
 
 describe("signup handoff token", () => {
   afterEach(() => {
@@ -113,5 +119,87 @@ describe("signup handoff token", () => {
     // The clear must carry the same attributes, or the browser ignores it.
     expect(cleared).toContain("SameSite=None");
     expect(cleared).toContain("Secure");
+  });
+});
+
+describe("checkout return token (trial_id on the return URL)", () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it("round-trips the business id through the return URL", () => {
+    vi.stubEnv("BUSINESS_SESSION_SECRET", TEST_SECRET);
+    const token = createCheckoutReturnToken("biz_1");
+    expect(verifyCheckoutReturnToken(token)).toBe("biz_1");
+
+    const url = new URL(withCheckoutReturnParam(RETURN_URL, "biz_1"));
+    expect(`${url.origin}${url.pathname}`).toBe(RETURN_URL);
+    const carried = url.searchParams.get(checkoutReturnParamName());
+    expect(carried).toBeTruthy();
+    expect(verifyCheckoutReturnToken(carried)).toBe("biz_1");
+  });
+
+  it("keeps query parameters the configured return URL already carries", () => {
+    vi.stubEnv("BUSINESS_SESSION_SECRET", TEST_SECRET);
+    const url = new URL(withCheckoutReturnParam(`${RETURN_URL}?campaign=spring`, "biz_1"));
+    expect(url.searchParams.get("campaign")).toBe("spring");
+    expect(verifyCheckoutReturnToken(url.searchParams.get("trial_id"))).toBe("biz_1");
+  });
+
+  it("lives 24 hours: a checkout link must outlast a slow payer, not a leaked URL", () => {
+    vi.stubEnv("BUSINESS_SESSION_SECRET", TEST_SECRET);
+    const now = Date.parse("2026-10-27T12:00:00Z");
+    const token = createCheckoutReturnToken("biz_1", now);
+    expect(verifyCheckoutReturnToken(token, now + TWENTY_FOUR_HOURS_MS - 1)).toBe("biz_1");
+    expect(verifyCheckoutReturnToken(token, now + TWENTY_FOUR_HOURS_MS)).toBeNull();
+  });
+
+  it("is a separate token family from the handoff cookie", () => {
+    vi.stubEnv("BUSINESS_SESSION_SECRET", TEST_SECRET);
+    // Domain separation: neither token verifies under the other's key, even
+    // though both are signed with BUSINESS_SESSION_SECRET.
+    expect(verifyCheckoutReturnToken(createSignupHandoffToken("biz_1", "cs_1"))).toBeNull();
+    expect(verifySignupHandoffToken(createCheckoutReturnToken("biz_1"))).toBeNull();
+  });
+
+  it("rejects tampered, foreign-secret, and junk tokens", () => {
+    vi.stubEnv("BUSINESS_SESSION_SECRET", TEST_SECRET);
+    const token = createCheckoutReturnToken("biz_1");
+    const [payload, signature] = token.split(".");
+
+    // Same signature, different business id.
+    const swapped = Buffer.from(
+      JSON.stringify({ b: "biz_2", e: Date.now() + 60_000 })
+    ).toString("base64url");
+    expect(verifyCheckoutReturnToken(`${swapped}.${signature}`)).toBeNull();
+    // Same payload, corrupted signature.
+    expect(verifyCheckoutReturnToken(`${payload}.${signature.slice(0, -4)}aaaa`)).toBeNull();
+    // A handoff token carries a checkout id as well, and lives under its own key.
+    expect(verifyCheckoutReturnToken(createSignupHandoffToken("biz_1", "cs_1"))).toBeNull();
+    expect(verifyCheckoutReturnToken(null)).toBeNull();
+    expect(verifyCheckoutReturnToken(undefined)).toBeNull();
+    expect(verifyCheckoutReturnToken("garbage")).toBeNull();
+    expect(verifyCheckoutReturnToken("a.b.c")).toBeNull();
+    expect(verifyCheckoutReturnToken("")).toBeNull();
+    expect(verifyCheckoutReturnToken(null)).toBeNull();
+    expect(verifyCheckoutReturnToken(undefined)).toBeNull();
+    expect(verifyCheckoutReturnToken("garbage")).toBeNull();
+    expect(verifyCheckoutReturnToken("a.b.c")).toBeNull();
+    expect(verifyCheckoutReturnToken("")).toBeNull();
+
+    vi.stubEnv("BUSINESS_SESSION_SECRET", "another-secret-entirely");
+    expect(verifyCheckoutReturnToken(token)).toBeNull();
+  });
+
+  it("fails closed without BUSINESS_SESSION_SECRET", () => {
+    vi.stubEnv("BUSINESS_SESSION_SECRET", "");
+    expect(() => createCheckoutReturnToken("biz_1")).toThrow(/BUSINESS_SESSION_SECRET/);
+    expect(() => withCheckoutReturnParam(RETURN_URL, "biz_1")).toThrow(/BUSINESS_SESSION_SECRET/);
+    expect(() => verifyCheckoutReturnToken("x.y")).toThrow(/BUSINESS_SESSION_SECRET/);
+  });
+
+  it("refuses to mint without a business id", () => {
+    vi.stubEnv("BUSINESS_SESSION_SECRET", TEST_SECRET);
+    expect(() => createCheckoutReturnToken("")).toThrow(/requires a business id/);
   });
 });

@@ -129,6 +129,20 @@ CREATE TABLE IF NOT EXISTS businesses (
   -- Owner's display name as typed by an admin in /admin/customers → "Create
   -- customer". NULL for self-serve signups, which never collect it.
   ownerName TEXT,
+  -- Owner password: the SAME self-describing scrypt string ADMIN_PASSWORD_HASH
+  -- uses (scrypt$N$r$p$salt$hash — src/lib/business-password.ts). NULL until the
+  -- owner sets one from the one-time setup link, so every existing row and every
+  -- self-serve signup simply stays NULL. Deliberately NOT part of the Business
+  -- type (src/lib/types.ts): the hash must never ride along on a business
+  -- object that a page or API response serializes.
+  passwordHash TEXT,
+  -- One-time password-setup link. Only the SHA-256 of the emailed token is
+  -- stored (src/lib/business-password.ts), exactly like
+  -- owner_login_tokens.tokenHash, so a database leak can never be replayed into
+  -- a password reset. 48-hour window; cleared to NULL the moment it is used.
+  setupTokenHash TEXT,
+  setupTokenExpiry TEXT,
+  setupTokenUsedAt TEXT,
   createdAt TEXT NOT NULL,
   updatedAt TEXT NOT NULL
 );
@@ -149,6 +163,32 @@ CREATE TABLE IF NOT EXISTS owner_login_tokens (
 );
 CREATE INDEX IF NOT EXISTS idx_owner_login_tokens_business
   ON owner_login_tokens(businessId);
+
+-- One live password-setup link per business. Partial so the (many) NULL rows
+-- coexist, and created AFTER the ALTER in src/lib/database.ts has added
+-- setupTokenHash to already-existing databases.
+CREATE UNIQUE INDEX IF NOT EXISTS idx_businesses_setup_token
+  ON businesses(setupTokenHash) WHERE setupTokenHash IS NOT NULL;
+
+-- Post-demo lead intake from the public /start page. Written by POST /api/leads
+-- and worked from the admin panel's Leads tab (/admin/leads), which moves
+-- `status` along new → contacted → account_created → dead.
+-- Ids and timestamps follow the rest of this schema (TEXT uuid id, ISO-8601
+-- TEXT stamps) rather than INTEGER/unixepoch, so one convention holds across
+-- every table, backup and admin page.
+CREATE TABLE IF NOT EXISTS leads (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  phone TEXT NOT NULL,
+  email TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'new',
+  createdAt TEXT NOT NULL,
+  updatedAt TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_leads_created ON leads(createdAt);
+CREATE INDEX IF NOT EXISTS idx_leads_status ON leads(status);
+CREATE INDEX IF NOT EXISTS idx_leads_email ON leads(email);
 
 -- Landing-page waitlist signups (Phase 6 tester acquisition).
 CREATE TABLE IF NOT EXISTS waitlist (

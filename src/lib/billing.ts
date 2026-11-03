@@ -2,6 +2,7 @@ import DodoPayments from "dodopayments";
 import {
   applyDodoWebhookEvent,
   createBusiness,
+  getBusinessByDodoSubscriptionId,
   getBusinessById,
   getBusinessByName,
   getBusinessByPhone,
@@ -17,6 +18,7 @@ import {
   DODO_TRIAL_DAYS,
 } from "./dodo";
 import { isDodoSubscriptionStatus } from "./dodo-events";
+import { withCheckoutReturnParam } from "./signup-handoff";
 import type { Business } from "./types";
 
 const TRIAL_MS = DODO_TRIAL_DAYS * 24 * 60 * 60 * 1000;
@@ -258,13 +260,16 @@ export async function createBillingSignup(
 
   // Checkout URLs are single-use, so every attempt mints a fresh session and
   // overwrites the stored id; the abandoned one simply expires on Dodo's side.
+  // The return URL carries a signed `trial_id` for THIS business: the handoff
+  // cookie can be dropped by the browser on the cross-site trip back from Dodo,
+  // the URL cannot. See withCheckoutReturnParam / /api/billing/confirm.
   const session = await client.checkoutSessions.create(
     buildSoloCheckoutSessionRequest({
       businessId: business.id,
       customerId,
       country,
       productId: getDodoSoloProductId(),
-      returnUrl: getDodoReturnUrl(),
+      returnUrl: withCheckoutReturnParam(getDodoReturnUrl(), business.id),
       cancelUrl: getDodoCancelUrl(),
     })
   );
@@ -333,6 +338,93 @@ export interface DodoSubscriptionLookup {
       | undefined
     >;
   };
+}
+
+/**
+ * Minimal structural view of the SDK's `subscriptions.retrieve` — the call that
+ * turns Dodo's redirect `subscription_id` into a business we can trust. Kept
+ * narrow (and separate from `DodoSubscriptionLookup`) so tests can stub it.
+ */
+export interface DodoSubscriptionFetch {
+  subscriptions: {
+    retrieve(subscriptionId: string): Promise<
+      | {
+          metadata?: unknown;
+          customer?: { customer_id?: string | null } | null;
+          subscription_id?: string | null;
+        }
+      | null
+      | undefined
+    >;
+  };
+}
+
+/**
+ * Resolve the business Dodo attributes a subscription to.
+ *
+ * This is the identity proof for a browser that comes back from checkout with
+ * neither our session cookie nor our signed `trial_id` — Dodo's redirect only
+ * carries `subscription_id`. That id is a pointer, never the proof itself: the
+ * answer comes from Dodo's own authenticated record (the same merchant
+ * credentials that sign the webhooks). The subscription's checkout metadata
+ * names one of our businesses, and the subscription's customer must be *that
+ * business's* Dodo customer, otherwise nothing is returned.
+ *
+ * Never throws: a missing API key, network error, unknown subscription, or any
+ * disagreement returns `null` and the caller answers 401.
+ *
+ * `client` is injectable so unit tests can stub the SDK without env setup.
+ */
+export async function resolveBusinessByDodoSubscription(
+  subscriptionId: string,
+  client?: DodoSubscriptionFetch
+): Promise<Business | null> {
+  // Fast path: a signature-verified webhook already linked this subscription.
+  const linked = await getBusinessByDodoSubscriptionId(subscriptionId);
+  if (linked) return linked;
+
+  let api: DodoSubscriptionFetch | undefined = client;
+  if (!api) {
+    try {
+      api = getDodoClient();
+    } catch (error) {
+      console.warn("[dodo-billing] subscription lookup skipped — Dodo client unavailable", {
+        message: error instanceof Error ? error.message : "unknown",
+      });
+      return null;
+    }
+  }
+
+  let record;
+  try {
+    record = await api.subscriptions.retrieve(subscriptionId);
+  } catch (error) {
+    console.warn("[dodo-billing] subscription lookup failed", {
+      message: error instanceof Error ? error.message : "unknown",
+    });
+    return null;
+  }
+
+  if (!record) return null;
+  // Defensive: the record must describe the id we asked about.
+  if (record.subscription_id && record.subscription_id !== subscriptionId) return null;
+
+  const metadata = record.metadata as Record<string, unknown> | null | undefined;
+  const hintedId = metadata?.[DODO_BUSINESS_ID_METADATA_KEY];
+  const customerId = record.customer?.customer_id;
+  if (typeof hintedId !== "string" || !hintedId) return null;
+  if (typeof customerId !== "string" || !customerId) return null;
+
+  const business = await getBusinessById(hintedId);
+  // The metadata hint is only a pointer — Dodo's customer record is the
+  // authority, exactly as the webhook write path treats it.
+  if (!business || business.dodoCustomerId !== customerId) return null;
+
+  console.info("[dodo-billing] subscription resolved to business", {
+    businessId: business.id,
+    subscriptionId,
+  });
+  return business;
 }
 
 /**

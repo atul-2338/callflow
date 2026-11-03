@@ -10,10 +10,16 @@
  *     number and needs no forwarding wizard; /app redirects to /onboarding
  *     until the step is 'done'),
  *   - `assignedNumber` comes from the typed E.164 number instead of the pool,
- *   - the 3-day trial starts immediately, exactly as
- *     scripts/activate-pilot.cjs does for a self-serve business:
- *     subscriptionStatus 'active', trialStartedAt = now, and a clearly-local
- *     `sub_local_pilot_…` marker in dodoSubscriptionId (never a real Dodo id).
+ *   - `trialStartedAt = now` and `subscriptionStatus = 'not_started'`: the row
+ *     starts a genuine 3-day trial (DODO_TRIAL_DAYS) and NOTHING else grants
+ *     access — `describeBillingAccess()` reports "trialing"/entitled only while
+ *     that window runs, then "awaiting_checkout"/paywalled, and only the
+ *     signature-verified Dodo webhook can later write 'active'. dodoCustomerId /
+ *     dodoSubscriptionId stay null: with no payment there is no Dodo subscription
+ *     to link, and a pre-filled id would block both the paywall's checkout (409)
+ *     and the webhook's `COALESCE` claim of the real subscription after payment.
+ *     (Self-serve rows get the same treatment: createBusiness() defaults to
+ *     'not_started' and the webhook supplies 'active'.)
  *
  * The business row and the owner's one-time login token are written in ONE
  * synchronous SQLite transaction. better-sqlite3 transactions must be
@@ -21,17 +27,25 @@
  * src/lib/db.ts column-for-column instead of calling it — `createBusiness` is
  * async and could not run inside `db.transaction()`.
  *
- * Owner login is a LINK, not a password: CallFlow has no `users` table and no
- * owner password — an owner session is the HMAC-signed
- * `callflow_business_session` cookie (src/lib/business-session.ts) that the
- * signup route mints. The link minted here leads to /owner-login, which mints
- * that exact same cookie, so admin-created owners log in through the identical
- * mechanism as self-serve owners.
+ * Owner sign-in is a LINK, and (since the password brief) also an optional
+ * PASSWORD:
+ *   - the link: an owner session is the HMAC-signed
+ *     `callflow_business_session` cookie (src/lib/business-session.ts) that the
+ *     signup route mints. The link minted here leads to /owner-login, which
+ *     mints that exact same cookie, so admin-created owners log in through the
+ *     identical mechanism as self-serve owners, and it keeps working even if
+ *     the owner never sets a password or misses the setup email;
+ *   - the password: this function ALSO mints a separate 48-hour one-time
+ *     setup token (businesses.setupTokenHash — SHA-256 only, like the login
+ *     token here) whose link (/setup-password) lets the owner choose their own
+ *     password for /login. The raw token is returned to the caller for the
+ *     email and is never stored or logged.
  */
 import { createHash, randomBytes, randomUUID } from "crypto";
 
 import type { Business } from "./types";
 import { BusinessNameTakenError, trialEndsAt } from "./billing";
+import { generateSetupToken } from "./business-password";
 import { getDb } from "./database";
 import { getBusinessByName, getBusinessByPhone } from "./db";
 import { claimPoolNumberEntry, findNumberOwner } from "./numbers-pool";
@@ -76,6 +90,13 @@ export interface CreateCustomerInput {
 
 export interface CreateCustomerResult {
   business: Business;
+  /**
+   * Raw one-time password-setup token for the emailed link. Never stored (only
+   * its SHA-256 is, in businesses.setupTokenHash) and never logged.
+   */
+  setupToken: string;
+  /** End of the 48-hour setup-link window. */
+  setupTokenExpiresAt: string;
   /** Raw one-time token for the login link — never stored; only its hash is. */
   loginToken: string;
   loginTokenExpiresAt: string;
@@ -183,14 +204,16 @@ const INSERT_BUSINESS_SQL = `INSERT INTO businesses (
    pendingVerificationExpiresAt, billingName, billingEmail, billingCountry,
    trialStartedAt, dodoCustomerId, dodoSubscriptionId, dodoCheckoutSessionId,
    subscriptionStatus, subscriptionPaymentId, smsVerificationCode,
-   smsVerificationExpiresAt, notificationEmail, ownerName, createdAt, updatedAt
+   smsVerificationExpiresAt, notificationEmail, ownerName, setupTokenHash,
+   setupTokenExpiry, createdAt, updatedAt
  ) VALUES (
    @id, @clientUid, @phoneNumber, @assignedNumber, @onboardingStep, @carrier,
    @forwardingStatus, @lastVerifiedAt, @pendingVerificationFor,
    @pendingVerificationExpiresAt, @billingName, @billingEmail, @billingCountry,
    @trialStartedAt, @dodoCustomerId, @dodoSubscriptionId, @dodoCheckoutSessionId,
    @subscriptionStatus, @subscriptionPaymentId, @smsVerificationCode,
-   @smsVerificationExpiresAt, @notificationEmail, @ownerName, @createdAt, @updatedAt
+   @smsVerificationExpiresAt, @notificationEmail, @ownerName, @setupTokenHash,
+   @setupTokenExpiry, @createdAt, @updatedAt
  )`;
 
 /** Same generation rule (and same retry) as createBusiness in src/lib/db.ts. */
@@ -232,14 +255,12 @@ export async function createAdminCustomer(
 
   const now = new Date();
   const createdAt = now.toISOString();
+  // THE trial clock. Nothing else in this row grants access, so the 3-day window
+  // is a real trial: describeBillingAccess() reports state "trialing" /
+  // entitled while it runs (see below) and stops doing so after DODO_TRIAL_DAYS.
   const trialStartedAt = createdAt;
-  // Self-describing local marker (mirrors activate-pilot.cjs): it can never be
-  // mistaken for a real Dodo id, and the random suffix keeps two creations in
-  // the same millisecond from colliding on idx_businesses_dodo_subscription.
-  const localSubscriptionId = `sub_local_pilot_${now.getTime()}_${randomBytes(4).toString(
-    "hex"
-  )}`;
   const { token, tokenHash, expiresAt: loginTokenExpiresAt } = generateOwnerLoginToken(now);
+  const setup = generateSetupToken(now);
 
   const business: Business = {
     id: randomUUID(),
@@ -259,11 +280,22 @@ export async function createAdminCustomer(
     billingCountry: "US",
     trialStartedAt,
     dodoCustomerId: null,
-    dodoSubscriptionId: localSubscriptionId,
+    // No payment, so there is NO Dodo subscription to point at: the id stays
+    // null and the trial clock alone carries access. That matters twice over —
+    // POST /api/billing/checkout refuses a business that already carries a
+    // dodoSubscriptionId (409 → portal, which does not exist here), and
+    // applyDodoWebhookEvent claims a real subscription id with
+    // `COALESCE(dodoSubscriptionId, …)`, so a fake local id could never be
+    // replaced by the genuine one after payment.
+    dodoSubscriptionId: null,
     dodoCheckoutSessionId: null,
-    // 'active' is what activate-pilot writes; with trialStartedAt set, access
-    // resolves to "trialing"/entitled for DODO_TRIAL_DAYS and no payment.
-    subscriptionStatus: "active",
+    // 'not_started' = nothing billed yet, which is the truth for a hand-created
+    // pilot/comp. describeBillingAccess() maps it (with pending_checkout) to
+    // "trialing"/entitled WHILE trialStartedAt is inside DODO_TRIAL_DAYS, and to
+    // "awaiting_checkout"/NOT entitled after that — i.e. the paywall. The
+    // signature-verified Dodo webhook is the only thing that later writes
+    // 'active' here; nothing in this module may.
+    subscriptionStatus: "not_started",
     subscriptionPaymentId: null,
     smsVerificationCode: null,
     smsVerificationExpiresAt: null,
@@ -281,7 +313,13 @@ export async function createAdminCustomer(
         .get(input.assignedNumber) as { id: string } | undefined;
       if (clash) throw new CustomerNumberTakenError();
 
-      getDb().prepare(INSERT_BUSINESS_SQL).run(business);
+      getDb()
+        .prepare(INSERT_BUSINESS_SQL)
+        .run({
+          ...business,
+          setupTokenHash: setup.tokenHash,
+          setupTokenExpiry: setup.expiresAt,
+        });
       getDb()
         .prepare(INSERT_LOGIN_TOKEN_SQL)
         .run(randomUUID(), business.id, tokenHash, createdAt, loginTokenExpiresAt);
@@ -302,6 +340,8 @@ export async function createAdminCustomer(
     business,
     loginToken: token,
     loginTokenExpiresAt,
+    setupToken: setup.token,
+    setupTokenExpiresAt: setup.expiresAt,
     trialEndsAt: trialEndsAt(trialStartedAt),
   };
 }

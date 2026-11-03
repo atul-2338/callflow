@@ -208,6 +208,16 @@ const BUSINESS_ADDED_COLUMNS: ReadonlyArray<readonly [string, string]> = [
   // (/admin/customers). Nullable and unused by the self-serve flow, so existing
   // rows and new signups simply leave it NULL.
   ["ownerName", "TEXT"],
+  // Owner password + one-time setup link. `passwordHash` is the same
+  // self-describing scrypt string ADMIN_PASSWORD_HASH uses; `setupTokenHash`
+  // holds only a SHA-256 of the emailed token (same rule as
+  // owner_login_tokens.tokenHash). All four are nullable, so existing rows and
+  // self-serve signups stay NULL. See src/lib/business-password.ts and the
+  // column comments in migrations/schema.sql.
+  ["passwordHash", "TEXT"],
+  ["setupTokenHash", "TEXT"],
+  ["setupTokenExpiry", "TEXT"],
+  ["setupTokenUsedAt", "TEXT"],
   // The CallFlow DID bound to this business by an admin (nullable). Matched
   // FIRST by matchDograhBusiness against Dograh's called_number; see
   // migrations/schema.sql and src/lib/dograh-webhook.ts.

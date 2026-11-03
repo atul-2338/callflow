@@ -17,8 +17,8 @@
 import { readFileSync, statSync } from "fs";
 import path from "path";
 
-import type { Business, Call, CallOutcome } from "./types";
-import { CALL_OUTCOMES } from "./types";
+import type { Business, Call, CallOutcome, Lead, LeadStatus } from "./types";
+import { CALL_OUTCOMES, LEAD_STATUSES } from "./types";
 import { getDb, getDbPath } from "./database";
 import { normalizeEnvValue } from "./util";
 
@@ -375,3 +375,29 @@ export async function adminSystemInfo(): Promise<AdminSystemInfo> {
     recentDograhCalls,
   };
 }
+// ---- Leads (public /start → POST /api/leads, worked from /admin/leads) ----
+
+type LeadRow = Omit<Lead, "status"> & { status: string };
+
+/** Unknown statuses fall back to "new" rather than leaking a bad enum to the UI. */
+function mapLead(row: LeadRow): Lead {
+  return {
+    ...row,
+    status: LEAD_STATUSES.includes(row.status as LeadStatus)
+      ? (row.status as LeadStatus)
+      : "new",
+  };
+}
+
+/**
+ * Every lead, newest first. The table is small (one row per post-demo request),
+ * so the panel reads it whole rather than paging — the status column is what
+ * moves, via PATCH /api/admin/leads/[id].
+ */
+export async function adminListLeads(): Promise<Lead[]> {
+  const rows = getDb()
+    .prepare("SELECT * FROM leads ORDER BY createdAt DESC")
+    .all() as unknown as LeadRow[];
+  return rows.map(mapLead);
+}
+

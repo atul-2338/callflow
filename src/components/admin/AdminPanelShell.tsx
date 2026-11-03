@@ -6,6 +6,7 @@ const ADMIN_NAV_LINKS = [
   { href: "/admin", label: "Overview" },
   { href: "/admin/businesses", label: "Businesses" },
   { href: "/admin/customers", label: "Customers" },
+  { href: "/admin/leads", label: "Leads" },
   { href: "/admin/numbers", label: "Numbers" },
   { href: "/admin/calls", label: "Calls" },
   { href: "/admin/system", label: "System" },

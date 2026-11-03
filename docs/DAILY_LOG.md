@@ -2,6 +2,45 @@
 
 Newest entry on TOP. Add entries via `.clinerules/workflows/end-day.md`.
 
+## 2026-10-29 (Dodo checkout return: signed `trial_id` instead of relying on the cookie)
+
+**Symptom (owner screenshot):** after paying, Dodo's redirect landed on
+`/checkout/return` and the page showed *"We can't match this browser to your
+checkout — the trial session cookie isn't in this browser."* (a 401 from
+`POST /api/billing/confirm`).
+
+**Diagnosis.** Three things had to line up, and two of them are not under our
+control: (1) `DODO_PAYMENTS_RETURN_URL` is fixed when the checkout session is
+created, so nothing per-checkout could ride on it; (2) the handoff cookie is
+already `SameSite=None; Secure`, but browsers still drop third-party cookies on
+the cross-site return (Safari ITP) and there is no cookie at all when the payer
+finishes on another device; (3) the only cookie-less path was the redirect's
+`session_id` matching `businesses.dodoCheckoutSessionId` exactly.
+
+**Fix.** The return URL now carries the identity itself:
+`withCheckoutReturnParam()` (`src/lib/signup-handoff.ts`) appends a signed
+`trial_id` — HMAC-SHA256 over `BUSINESS_SESSION_SECRET` with its own domain key
+`callflow-checkout-return:v1`, 24 h TTL, payload `{b: businessId}`. Both
+checkout creators use it (`createBillingSignup` in `src/lib/billing.ts` and
+`POST /api/billing/checkout`). `CheckoutReturn.tsx` posts it as `trialId`
+(tolerating a redirect that pastes its own query onto ours with a second `?`),
+and `/api/billing/confirm` accepts it as a third proof — order: session cookie →
+handoff cookie → URL token → legacy `session_id` DB lookup. The URL token is
+bound to the row's current `dodoCheckoutSessionId` (missing checkout → 401; a
+disagreeing redirect `session_id` → 401) and, like the cookie, converts into a
+real session ONLY once the signature-verified webhook has linked a
+subscription. No payment/entitlement logic, no `business-session.ts`, no Dodo
+webhook file touched. Error screen reworded (no "cookie isn't in this browser")
+and now offers "Sign in instead" as well as "Back to signup".
+
+**Gates:** `tsc --noEmit` 0; `eslint` 0 errors (2 pre-existing unused-`secure`
+warnings); `vitest run` **392/392** across 43 files (12 new tests: return-token
+round-trip/expiry/forgery/domain-separation, plus confirm-route 200-with-no-
+cookies, 200-before-webhook-no-session, 401 mismatch/unknown/expired/forged, and
+the signup route asserting `return_url` carries the token); `next build` exit 0.
+Nothing committed or deployed.
+
+
 ## 2026-10-28 (task 7 — deploy of the admin create-customer work: LIVE at `bb338ab`)
 
 **Owner-approved** (`.clinerules/workflows/deploy.md` run; the approval covered

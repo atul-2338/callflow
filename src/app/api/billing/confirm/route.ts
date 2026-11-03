@@ -8,14 +8,17 @@ import {
   describeBillingAccess,
   isTrialExpired,
   reconcileDodoCheckout,
+  resolveBusinessByDodoSubscription,
   trialEndsAt,
 } from "@/lib/billing";
 import { getBusinessByCheckoutSessionId, getBusinessById } from "@/lib/db";
 import {
   clearSignupHandoffCookie,
   signupHandoffFromCookieHeader,
+  verifyCheckoutReturnToken,
   type SignupHandoff,
 } from "@/lib/signup-handoff";
+import type { Business } from "@/lib/types";
 
 export const runtime = "nodejs";
 
@@ -39,70 +42,117 @@ const lastReconcileAt = new Map<string, number>();
  * lags behind the browser redirect.
  */
 /**
- * Optional `{ checkoutSessionId }` posted by the return page: Dodo's redirect
- * `session_id`. Absent or malformed bodies simply skip this extra binding
- * check — the handoff cookie itself is always required and verified.
+ * Optional JSON body posted by the return page:
+ *
+ *   - `checkoutSessionId`: Dodo's redirect `session_id`. It double-checks
+ *     whichever identity proof the request carries, and on its own still backs
+ *     the legacy cookie-less lookup below.
+ *   - `trialId`: the signed `trial_id` from the return URL — the transport that
+ *     survives browsers dropping our cookies on the cross-site trip back.
+ *   - `subscriptionId`: Dodo's redirect `subscription_id`. Dodo sends this (not
+ *     `session_id`) once the checkout has produced a subscription, so it is the
+ *     proof that survives both a cookie-less browser and a rewritten return URL;
+ *     it is only believed after Dodo's own API confirms the customer.
+ *
+ * A missing or malformed body is not an error; such a request is simply
+ * unauthenticated unless it carries a session cookie.
  */
-async function readBodyCheckoutSessionId(request: Request): Promise<string | null> {
+async function readConfirmBody(
+  request: Request
+): Promise<{
+  checkoutSessionId: string | null;
+  trialId: string | null;
+  subscriptionId: string | null;
+}> {
   try {
-    const body = (await request.json()) as { checkoutSessionId?: unknown };
-    return typeof body?.checkoutSessionId === "string" && body.checkoutSessionId
-      ? body.checkoutSessionId
-      : null;
+    const body = (await request.json()) as {
+      checkoutSessionId?: unknown;
+      trialId?: unknown;
+      subscriptionId?: unknown;
+    } | null;
+    return {
+      checkoutSessionId:
+        typeof body?.checkoutSessionId === "string" && body.checkoutSessionId
+          ? body.checkoutSessionId
+          : null,
+      trialId: typeof body?.trialId === "string" && body.trialId ? body.trialId : null,
+      subscriptionId:
+        typeof body?.subscriptionId === "string" && body.subscriptionId
+          ? body.subscriptionId
+          : null,
+    };
   } catch {
-    return null;
+    return { checkoutSessionId: null, trialId: null, subscriptionId: null };
   }
 }
 
 export async function POST(request: Request) {
+  const body = await readConfirmBody(request);
   const cookieHeader = request.headers.get("cookie");
-  const businessId = businessIdFromCookieHeader(cookieHeader);
+  const cookieBusinessId = businessIdFromCookieHeader(cookieHeader);
 
-  // Two authenticated paths:
-  //  1. the full business session cookie (the owner already has a session), or
+  // Four proofs, in order of strength:
+  //  1. the full business session cookie (the owner already has a session),
   //  2. the checkout-bound signup handoff cookie minted by /api/billing/signup
   //     for an existing business (a row pre-created by /setup, or a returning
   //     owner re-running the wizard). It is bound to the exact checkout
   //     session this server created, so knowing the phone number alone still
-  //     opens nothing — and it becomes a session below only after the webhook
-  //     has linked a subscription.
+  //     opens nothing,
+  //  3. the signed `trial_id` on the return URL — the same identity as (2) but
+  //     carried where a browser cannot drop it on the cross-site trip back
+  //     from Dodo ("the trial session cookie isn't in this browser"),
+  //  4. Dodo's own redirect `subscription_id`, resolved through Dodo's
+  //     authenticated API (subscription metadata → business, cross-checked
+  //     against the subscription's customer). This is the transport Dodo
+  //     actually uses: its success redirect carries `subscription_id`,
+  //     `payment_id` and `status`, never our `trial_id` or `session_id`.
+  // Any of (2)-(4) becomes a session below only after the webhook has linked a
+  // subscription.
+  //
+  // A session cookie can also name a row that no longer exists (a business
+  // deleted or reset on this database). That is not fatal — it must not turn
+  // the owner's return page into a 404 — so it falls through to (2)-(4).
   let handoff: SignupHandoff | null = null;
-  if (!businessId) {
+  let returnTokenBusinessId: string | null = null;
+  let subscriptionBusiness: Business | null = null;
+
+  let business = cookieBusinessId ? await getBusinessById(cookieBusinessId) : null;
+  if (cookieBusinessId && !business) {
+    console.warn("[billing-confirm] session cookie names a missing business — falling back", {
+      businessId: cookieBusinessId,
+    });
+  }
+
+  if (!business) {
     handoff = signupHandoffFromCookieHeader(cookieHeader);
-    if (!handoff) {
-      // Cookie-less fallback: look up business by checkout session id from body
-      let sessionIdFallback: string | null = null;
-      try {
-        const raw = await request.clone().json() as { checkoutSessionId?: unknown };
-        if (typeof raw.checkoutSessionId === "string" && raw.checkoutSessionId) {
-          sessionIdFallback = raw.checkoutSessionId;
-        }
-      } catch { /* ignore */ }
-
-      if (sessionIdFallback) {
-        const found = await getBusinessByCheckoutSessionId(sessionIdFallback);
-        if (found) {
-          // Treat as handoff with the session id we just verified from DB
-          handoff = { businessId: found.id, checkoutSessionId: sessionIdFallback };
-        }
+    if (!handoff && body.trialId) {
+      returnTokenBusinessId = verifyCheckoutReturnToken(body.trialId);
+    }
+    // Legacy fallback: look up business by checkout session id from body
+    if (!handoff && !returnTokenBusinessId && body.checkoutSessionId) {
+      const found = await getBusinessByCheckoutSessionId(body.checkoutSessionId);
+      if (found) {
+        // Treat as handoff with the session id we just verified from DB
+        handoff = { businessId: found.id, checkoutSessionId: body.checkoutSessionId };
       }
+    }
+    if (!handoff && !returnTokenBusinessId && body.subscriptionId) {
+      subscriptionBusiness = await resolveBusinessByDodoSubscription(body.subscriptionId);
+    }
 
-      if (!handoff) {
-        return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-      }
+    const proofBusinessId =
+      handoff?.businessId ?? returnTokenBusinessId ?? subscriptionBusiness?.id ?? null;
+    if (!proofBusinessId) {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
+
+    business = subscriptionBusiness ?? (await getBusinessById(proofBusinessId));
+    if (!business) {
+      return NextResponse.json({ error: "Billing profile not found" }, { status: 404 });
     }
   }
 
-  // Exactly one of the two proofs is present here.
-  const tokenBusinessId = businessId ?? handoff?.businessId;
-  if (!tokenBusinessId) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
-
-  let business = await getBusinessById(tokenBusinessId);
-  if (!business) {
-    return NextResponse.json({ error: "Billing profile not found" }, { status: 404 });
-  }
+  const tokenBusinessId = business.id;
 
   if (handoff) {
     // The handoff must still name the checkout session currently stored on
@@ -112,8 +162,20 @@ export async function POST(request: Request) {
     if (handoff.checkoutSessionId !== business.dodoCheckoutSessionId) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
-    const redirectSessionId = await readBodyCheckoutSessionId(request);
-    if (redirectSessionId && redirectSessionId !== handoff.checkoutSessionId) {
+    if (body.checkoutSessionId && body.checkoutSessionId !== handoff.checkoutSessionId) {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
+  }
+
+  if (returnTokenBusinessId) {
+    // The URL token names the business but not the checkout — the return URL is
+    // fixed before Dodo issues `session_id` — so it only stands while this
+    // business has a checkout outstanding, and the redirect's own `session_id`
+    // (when the browser brought one) must match the id we recorded.
+    if (!business.dodoCheckoutSessionId) {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
+    if (body.checkoutSessionId && body.checkoutSessionId !== business.dodoCheckoutSessionId) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
   }
@@ -150,9 +212,9 @@ export async function POST(request: Request) {
     checkoutSessionId: business.dodoCheckoutSessionId,
   });
 
-  if (handoff && business.dodoSubscriptionId) {
+  if ((handoff || returnTokenBusinessId || subscriptionBusiness) && business.dodoSubscriptionId) {
     // The signature-verified webhook write path has linked a subscription to
-    // the business this handoff was issued for: checkout completion is now
+    // the business this identity was issued for: checkout completion is now
     // proven, so hand the browser the real session and retire the handoff.
     const secure =
       process.env.NODE_ENV === "production" || new URL(request.url).protocol === "https:";

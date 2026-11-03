@@ -3,12 +3,16 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Phone, PhoneCall, Settings } from "lucide-react";
+import { Phone, PhoneCall, Settings, UserRound } from "lucide-react";
+
+import OwnerLogoutButton from "@/components/owner/OwnerLogoutButton";
 
 const navItems = [
   { href: "/app", label: "Dashboard", icon: Phone },
   { href: "/calls", label: "Calls", icon: PhoneCall },
   { href: "/settings", label: "Settings", icon: Settings },
+  // Adds the owner's own account page (email, client ID, change password).
+  { href: "/account", label: "Account", icon: UserRound },
 ];
 
 export default function Navigation() {
@@ -69,6 +73,9 @@ export default function Navigation() {
             );
           })}
         </nav>
+        <div className="ml-2">
+          <OwnerLogoutButton />
+        </div>
       </div>
     </header>
   );

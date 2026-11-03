@@ -9,6 +9,7 @@ import {
   createBusinessSessionToken,
 } from "@/lib/business-session";
 import {
+  createCheckoutReturnToken,
   createSignupHandoffToken,
   signupHandoffCookieName,
 } from "@/lib/signup-handoff";
@@ -238,5 +239,119 @@ describe("POST /api/billing/confirm", () => {
     expect(response.status).toBe(401);
     expect(await response.json()).toEqual({ error: "Unauthorized" });
     expect(response.headers.getSetCookie()).toEqual([]);
+  });
+
+  it("signed trial_id on the return URL, no cookies at all: 200 and a session is minted", async () => {
+    // The browser is back from Dodo with nothing but the URL: no session
+    // cookie, no handoff cookie. The signed trial_id must be enough.
+    const business = await createBusiness(
+      seedBusiness({
+        ...subscribedBusiness("+12125550006", "cs_test_1", "6"),
+        billingName: "Url Biz",
+      })
+    );
+
+    const response = await POST(
+      confirmRequest({
+        body: {
+          trialId: createCheckoutReturnToken(business.id),
+          checkoutSessionId: "cs_test_1",
+        },
+      })
+    );
+
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as Record<string, unknown>;
+    expect(body.businessId).toBe(business.id);
+    expect(body.access).toEqual({ state: "trialing", entitled: true });
+
+    const session = response.headers
+      .getSetCookie()
+      .find((c) => c.startsWith(`${businessSessionCookieName()}=`));
+    expect(session).toBeDefined();
+    expect(session).toContain("HttpOnly");
+    expect(session).toContain("SameSite=Lax");
+  });
+
+  it("signed trial_id before the webhook linked a subscription: trusted state, no session", async () => {
+    // No dodoCustomerId → reconcile is skipped, so this proves the URL identity
+    // only reports what the webhook has written instead of granting anything.
+    const business = await createBusiness(
+      seedBusiness({
+        phoneNumber: "+12125550007",
+        dodoCheckoutSessionId: "cs_test_pending",
+        billingName: "Awaiting Url Biz",
+      })
+    );
+
+    const response = await POST(
+      confirmRequest({ body: { trialId: createCheckoutReturnToken(business.id) } })
+    );
+
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as Record<string, unknown>;
+    expect(body.hasSubscription).toBe(false);
+    expect(body.subscriptionStatus).toBe("pending_checkout");
+    expect(response.headers.getSetCookie()).toEqual([]);
+  });
+
+  it("signed trial_id whose redirect session_id disagrees with the row: exact 401", async () => {
+    const business = await createBusiness(
+      seedBusiness({
+        ...subscribedBusiness("+12125550008", "cs_recorded", "8"),
+        billingName: "Url Mismatch Biz",
+      })
+    );
+
+    const response = await POST(
+      confirmRequest({
+        body: {
+          trialId: createCheckoutReturnToken(business.id),
+          checkoutSessionId: "cs_someone_else",
+        },
+      })
+    );
+
+    expect(response.status).toBe(401);
+    expect(await response.json()).toEqual({ error: "Unauthorized" });
+    expect(response.headers.getSetCookie()).toEqual([]);
+  });
+
+  it("signed trial_id for a business that never started a checkout: exact 401", async () => {
+    const business = await createBusiness(
+      seedBusiness({ phoneNumber: "+12125550009", billingName: "No Checkout Biz" })
+    );
+
+    const response = await POST(
+      confirmRequest({ body: { trialId: createCheckoutReturnToken(business.id) } })
+    );
+
+    expect(response.status).toBe(401);
+    expect(await response.json()).toEqual({ error: "Unauthorized" });
+  });
+
+  it("forged or expired trial_id: exact 401", async () => {
+    const business = await createBusiness(
+      seedBusiness({
+        ...subscribedBusiness("+12125550010", "cs_test_1", "10"),
+        billingName: "Stale Url Biz",
+      })
+    );
+
+    const forged = await POST(confirmRequest({ body: { trialId: "garbage.garbage" } }));
+    expect(forged.status).toBe(401);
+    expect(await forged.json()).toEqual({ error: "Unauthorized" });
+
+    // Minted 25 hours ago → past the 24-hour checkout-link window.
+    const expired = await POST(
+      confirmRequest({
+        body: {
+          trialId: createCheckoutReturnToken(business.id, Date.now() - 25 * 60 * 60 * 1000),
+        },
+      })
+    );
+    expect(expired.status).toBe(401);
+    expect(await expired.json()).toEqual({ error: "Unauthorized" });
+    expect(expired.headers.getSetCookie()).toEqual([]);
   });
 });

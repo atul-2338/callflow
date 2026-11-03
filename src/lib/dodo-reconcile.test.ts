@@ -9,7 +9,8 @@ const testDbPath = path.join(os.tmpdir(), `callflow-reconcile-test-${process.pid
 process.env.DATABASE_PATH = testDbPath;
 
 const { createBusiness } = await import("./db");
-const { describeBillingAccess, reconcileDodoCheckout } = await import("./billing");
+const { describeBillingAccess, reconcileDodoCheckout, resolveBusinessByDodoSubscription, DODO_BUSINESS_ID_METADATA_KEY } =
+  await import("./billing");
 const { getDb } = await import("./database");
 
 type NewBusiness = Parameters<typeof createBusiness>[0];
@@ -248,5 +249,122 @@ describe("reconcileDodoCheckout", () => {
 
     expect(result.dodoSubscriptionId).toBe("sub_new");
     expect(result.trialStartedAt).toBe("2026-09-23T12:00:00.000Z");
+  });
+});
+
+/** A stub standing in for the Dodo SDK client's `subscriptions.retrieve`. */
+function stubRetrieve(record: unknown, error?: Error) {
+  const retrieve = vi.fn(async () => {
+    if (error) throw error;
+    return record;
+  });
+  return { subscriptions: { retrieve } };
+}
+
+function subscriptionRecord(businessId: string | null, customerId: string, subscriptionId: string) {
+  return {
+    subscription_id: subscriptionId,
+    status: "active",
+    created_at: "2026-09-22T12:00:00.000Z",
+    metadata: businessId ? { [DODO_BUSINESS_ID_METADATA_KEY]: businessId } : {},
+    customer: { customer_id: customerId },
+  };
+}
+
+describe("resolveBusinessByDodoSubscription", () => {
+  it("resolves through Dodo's record when the webhook has not linked it yet", async () => {
+    const ids = uniqueIds();
+    const business = await createBusiness(
+      seed({ phoneNumber: ids.phoneNumber, dodoCustomerId: ids.customerId })
+    );
+
+    const resolved = await resolveBusinessByDodoSubscription(
+      ids.subscriptionId,
+      stubRetrieve(subscriptionRecord(business.id, ids.customerId, ids.subscriptionId)) as never
+    );
+
+    expect(resolved?.id).toBe(business.id);
+  });
+
+  it("refuses the metadata hint when the subscription's customer is someone else", async () => {
+    const ids = uniqueIds();
+    const business = await createBusiness(
+      seed({ phoneNumber: ids.phoneNumber, dodoCustomerId: ids.customerId })
+    );
+
+    // A forged/foreign subscription carrying our business id must not open it:
+    // Dodo's customer record is the authority, not the hint.
+    const resolved = await resolveBusinessByDodoSubscription(
+      ids.subscriptionId,
+      stubRetrieve(subscriptionRecord(business.id, "cus_someone_else", ids.subscriptionId)) as never
+    );
+
+    expect(resolved).toBeNull();
+  });
+
+  it("returns the linked business without calling Dodo at all", async () => {
+    const ids = uniqueIds();
+    const business = await createBusiness(
+      seed({
+        phoneNumber: ids.phoneNumber,
+        dodoCustomerId: ids.customerId,
+        dodoSubscriptionId: ids.subscriptionId,
+      })
+    );
+    const client = stubRetrieve(subscriptionRecord(business.id, ids.customerId, ids.subscriptionId));
+
+    const resolved = await resolveBusinessByDodoSubscription(ids.subscriptionId, client as never);
+
+    expect(resolved?.id).toBe(business.id);
+    expect(client.subscriptions.retrieve).not.toHaveBeenCalled();
+  });
+
+  it("returns null on a Dodo lookup error instead of throwing", async () => {
+    const ids = uniqueIds();
+    await createBusiness(seed({ phoneNumber: ids.phoneNumber, dodoCustomerId: ids.customerId }));
+
+    const resolved = await resolveBusinessByDodoSubscription(
+      ids.subscriptionId,
+      stubRetrieve(null, new Error("dodo down")) as never
+    );
+
+    expect(resolved).toBeNull();
+  });
+
+  it("returns null when Dodo's record names no business or no customer", async () => {
+    const ids = uniqueIds();
+    await createBusiness(seed({ phoneNumber: ids.phoneNumber, dodoCustomerId: ids.customerId }));
+
+    const hintless = await resolveBusinessByDodoSubscription(
+      ids.subscriptionId,
+      stubRetrieve(subscriptionRecord(null, ids.customerId, ids.subscriptionId)) as never
+    );
+    expect(hintless).toBeNull();
+
+    const noCustomer = await resolveBusinessByDodoSubscription(
+      ids.subscriptionId,
+      stubRetrieve({ subscription_id: ids.subscriptionId, customer: null }) as never
+    );
+    expect(noCustomer).toBeNull();
+
+    const unknownBusiness = await resolveBusinessByDodoSubscription(
+      ids.subscriptionId,
+      stubRetrieve(subscriptionRecord("no-such-business", ids.customerId, ids.subscriptionId)) as never
+    );
+    expect(unknownBusiness).toBeNull();
+  });
+
+  it("returns null when the record describes a different subscription", async () => {
+    const ids = uniqueIds();
+    const business = await createBusiness(
+      seed({ phoneNumber: ids.phoneNumber, dodoCustomerId: ids.customerId })
+    );
+
+    const resolved = await resolveBusinessByDodoSubscription(
+      ids.subscriptionId,
+      stubRetrieve(subscriptionRecord(business.id, ids.customerId, "sub_other")) as never
+    );
+
+    expect(resolved).toBeNull();
   });
 });
