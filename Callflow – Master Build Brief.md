@@ -19,7 +19,8 @@ Micro SaaS for US local businesses. A missed call forwards to a Telnyx number, a
 - Do not change the working call flow or the `/api/webhooks/dograh` auth (`x-webhook-secret` header) unless a step below says so.
 - Never print or commit secrets. Read env var names only. `.env` stays out of git.
 - Commit after each completed step with a clear message. Make small changes; do not refactor unrelated code.
-- After each step, run the build and fix errors before moving on.
+- After every step, run the build and fix any errors before moving on.
+- **Never run a `DROP`, `DELETE`, `TRUNCATE`, `DROP TABLE`/`DROP INDEX`, mass `UPDATE`/`DELETE`, or any other destructive or reset SQL against a real database file** (`/var/data/callflow.db` on the VPS, `data/callflow.db` locally, or any backup copy). Automatic tests must only ever open a temporary database file they created themselves (a fresh temp directory + `DATABASE_PATH`, as `src/lib/*.test.ts` already do); a test that could touch a real database is a bug and must be fixed before it is run again.
 
 **Working loop:** at the start of every session read this file and `PROGRESS.md`, then continue from the first unfinished step. After each step, run the build, fix any errors yourself, check the work against the Definition of done, then add one line to `PROGRESS.md` (step name, done, anything the owner must do). Ask the owner only at a **YOU** item or after two failed fixes on the same problem.
 
