@@ -1,5 +1,6 @@
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
+import { after } from "next/server";
 
 import BillingNotice from "@/components/billing/BillingNotice";
 import DashboardClient from "@/components/dashboard/DashboardClient";
@@ -10,6 +11,7 @@ import {
   verifyBusinessSessionToken,
 } from "@/lib/business-session";
 import { getBusinessById } from "@/lib/db";
+import { maybeSendTrialReminder } from "@/lib/trial-reminder";
 
 export const dynamic = "force-dynamic";
 
@@ -42,6 +44,13 @@ export default async function DashboardPage() {
   // respected) — the client component only formats the number it is handed, so
   // the first paint and the hydration can never disagree.
   const trialDaysLeft = daysUntil(trialEnd);
+
+  // Day-2 trial email (build brief step 5). Fires at most once per business; the
+  // helper re-checks every condition against the stored timestamps, so a page
+  // refresh can never double-send. after() keeps SMTP off the render path.
+  if (access.state === "trialing") {
+    after(() => maybeSendTrialReminder(business));
+  }
 
   return (
     <div className="space-y-6">

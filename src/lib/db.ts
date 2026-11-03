@@ -731,6 +731,7 @@ export async function updateBusiness(
          notificationEmail = @notificationEmail,
          address = @address,
          trialEndedEmailAt = @trialEndedEmailAt,
+         trialReminderEmailAt = @trialReminderEmailAt,
          updatedAt = @updatedAt
         WHERE id = @id`
     )

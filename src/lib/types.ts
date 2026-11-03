@@ -207,6 +207,11 @@ export interface Business {
    * email from being sent again. Null = never sent.
    */
   trialEndedEmailAt?: string | null;
+  /**
+   * First time the day-2 trial email was sent (see src/lib/trial-reminder.ts).
+   * Null = never sent.
+   */
+  trialReminderEmailAt?: string | null;
   /** Business address (Settings → Business information → Address). Free-form
    * text; null in SQLite until the owner saves one. */
   address?: string;

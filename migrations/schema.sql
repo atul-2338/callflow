@@ -148,6 +148,9 @@ CREATE TABLE IF NOT EXISTS businesses (
   -- active subscription, so the message is never sent twice (see
   -- src/app/api/v1/telephony/telnyx/answer/route.ts).
   trialEndedEmailAt TEXT,
+  -- One-shot stamp for the day-2 trial email ("you will be charged on ...").
+  -- See src/lib/trial-reminder.ts; NULL = not sent yet.
+  trialReminderEmailAt TEXT,
   createdAt TEXT NOT NULL,
   updatedAt TEXT NOT NULL
 );

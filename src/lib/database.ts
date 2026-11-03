@@ -233,6 +233,8 @@ const BUSINESS_ADDED_COLUMNS: ReadonlyArray<readonly [string, string]> = [
   // src/app/api/v1/telephony/telnyx/answer/route.ts). Nullable: every existing
   // row means "not sent yet".
   ["trialEndedEmailAt", "TEXT"],
+  // One-shot stamp for the day-2 trial email (src/lib/trial-reminder.ts).
+  ["trialReminderEmailAt", "TEXT"],
 ];
 
 function migrateCallsTable(db: Database.Database): void {
