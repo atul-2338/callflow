@@ -2,6 +2,38 @@
 
 Newest entry on TOP. Add entries via `.clinerules/workflows/end-day.md`.
 
+## 2026-11-03 (Build brief steps 0-7 run end to end)
+
+**What:** worked `Callflow - Master Build Brief.md` from step 0 to step 7 as one
+developer run, with a build after every step and one commit per step. The brief
+lived in the repo root; `PROGRESS.md` (new) is the authoritative step log, and
+`REPO_AUDIT.md` (new) is the step-0 audit.
+
+**Code delivered:** unmatched Dograh calls are now stored with
+`business_id NULL` instead of dropped (visible at `/admin/calls?filter=unlinked`);
+call-alert emails are wired into the webhook via `after()`; a trial-expired gate
+replaces the agent with one spoken "unavailable" line and a one-shot owner email;
+the day-2 trial email (charge date) is sent lazily on the dashboard; the low-pool
+alert fires at 3 or fewer free numbers; `/savannah` and `/austin` landing pages
+exist with a per-city demo line slot and the homepage gained a demo-video slot;
+`/setup`, the Plivo/TextBelt code, routes and env references are gone.
+
+**Gates:** `tsc` clean, `npm run build` green, `npm test` 401/401 after every
+step. Nothing deployed: no push, no VPS action, no secret read or changed.
+
+**Problems found:** (1) an early version of the new `trial-reminder` test ran
+`DELETE FROM businesses` against the LOCAL dev database before I pointed it at a
+temp file - production untouched, local dev rows need reseeding; (2) gitleaks is
+still not on PATH, so the pre-commit secret scan keeps skipping; (3) the brief's
+Groq transcription step does not exist anywhere, so call-alert emails have no
+transcript summary.
+
+**Tomorrow's first 3:** (1) owner stocks the number pool and sets SMTP on the
+VPS; (2) rotate `WEBHOOK_SECRET` in the VPS `.env` + Dograh node; (3) a Dodo
+test-mode checkout on prod to close definition-of-done item 5.
+
+
+
 ## 2026-10-29 (Dodo checkout return: signed `trial_id` instead of relying on the cookie)
 
 **Symptom (owner screenshot):** after paying, Dodo's redirect landed on

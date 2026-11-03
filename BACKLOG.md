@@ -131,6 +131,17 @@ order (inferred) — owner to confirm or correct.*
     (never committed per rules).
 
 ## DONE
+
+- 2026-11-03 — **Build brief steps 0-7 (one run).** `PROGRESS.md` +
+  `REPO_AUDIT.md` added; unmatched calls stored unlinked (step 1); trial-expired
+  gate + low-pool alert + `/setup` removed (step 2); unlinked count on the admin
+  overview (step 3); call-alert email wired (step 4); day-2 trial email with the
+  charge date (step 5); Plivo/TextBelt code + env refs deleted (step 6);
+  `/savannah` + `/austin` pages and a homepage demo-video slot (step 7).
+  Gates: tsc clean, build green, 401/401 tests. Not deployed.
+  Open owner items: pool stock, SMTP on the VPS, `WEBHOOK_SECRET` rotation, city
+  demo numbers, demo video, and the admin "Create customer" retire decision.
+
 - **2026-10-29** — **Dodo checkout return no longer depends on a browser
   cookie.** Diagnosis: `DODO_PAYMENTS_RETURN_URL` is fixed at session-creation
   time, the handoff cookie is `SameSite=None; Secure` (correct) but browsers

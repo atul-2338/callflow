@@ -66,6 +66,24 @@ Conventions used here: ASCII only, one row per step, commit sha recorded.
   Nothing in the customer flow depends on it.
 - **Trial-ended calls** are answered with one spoken line instead of the agent,
   and no `calls` row is written (the call never reaches Dograh, so no webhook
+  fires). Deliberate; flagged for the definition-of-done review.
+## Notes and incidents
+
+- **Local dev DB reset (2026-11-03).** The first version of
+  `src/lib/trial-reminder.test.ts` forgot to point `DATABASE_PATH` at a temp file,
+  so its `beforeEach` ran `DELETE FROM businesses` against `data/callflow.db` -
+  the LOCAL dev database. `calls` were untouched (still 27 rows) and production
+  was never involved (the VPS uses `/var/data/callflow.db`). The test now creates
+  its own temp database with `fs.mkdtempSync` and is checked to leave the dev DB
+  untouched; `npm run seed-test` or the admin page can repopulate local rows.
+- **Docs are ASCII-only.** Earlier shell rewrites of `PROGRESS.md` /
+  `REPO_AUDIT.md` mangled UTF-8 punctuation; both were rewritten in plain ASCII so
+  any encoding round-trip is now safe.
+- **gitleaks is not on PATH**, so every commit prints "pre-commit: gitleaks not
+  found, skipping secret scan". Nothing secret was staged (checked by hand);
+  installing it is an owner task (NEEDS OWNER 9).
+
+
 
 ## Definition of done - review
 
@@ -126,5 +144,3 @@ Only the owner can do these. Everything else in the brief is done.
    create a customer in `/admin/customers` locally to repopulate.
 9. **Install gitleaks** (`winget install -e --id Gitleaks.Gitleaks`) so the
    pre-commit secret scan stops skipping.
-
-  fires). Deliberate; flagged for the definition-of-done review.
