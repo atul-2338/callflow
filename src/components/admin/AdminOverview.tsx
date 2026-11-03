@@ -74,6 +74,9 @@ export default async function AdminOverview() {
             Calls
           </p>
           <p className="mt-2 text-3xl font-bold text-ink">{calls}</p>
+          <p className="mt-1 text-xs font-medium text-ink-2">
+            {unlinked} unlinked
+          </p>
         </Link>
         <Link
           href="/admin/audit"
