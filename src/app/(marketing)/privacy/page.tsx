@@ -91,8 +91,8 @@ export default function PrivacyPage() {
         </p>
         <ul className="list-disc space-y-2 pl-5">
           <li>
-            <b className="text-ink">Plivo</b> — provisions your dedicated number
-            and carries the call audio and call-detail records.
+            <b className="text-ink">Telnyx</b> — provides the CallFlow phone
+            number and carries the call audio and call-detail records.
           </li>
           <li>
             <b className="text-ink">Dograh</b> — runs the AI voice agent,

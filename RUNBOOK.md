@@ -15,7 +15,7 @@ This runbook covers the launch path for:
 - SQLite database stored on a persistent disk
 - Nginx reverse proxy
 - Dograh webhook ingestion
-- Telnyx call answering (Plivo is legacy and not in use)
+- Telnyx call answering
 - Firebase Cloud Messaging push notifications
 - backup + rollback
 

@@ -394,16 +394,6 @@ export async function getCallsForBusiness(
   return rows.map(mapCall);
 }
 
-export async function getCallBySignalwireSid(
-  signalwireCallSid: string
-): Promise<Call | null> {
-  if (!signalwireCallSid) return null;
-  const row = getDb()
-    .prepare("SELECT * FROM calls WHERE signalwireCallSid = ?")
-    .get(signalwireCallSid) as CallRow | undefined;
-  return row ? mapCall(row) : null;
-}
-
 /** Dograh webhook idempotency lookup (backed by the partial unique index). */
 export async function getCallByDograhRunId(runId: string): Promise<Call | null> {
   if (!runId) return null;

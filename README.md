@@ -1,13 +1,15 @@
 # CallFlow — Missed-Call Answering for Local Businesses
 
-CallFlow forwards a business's missed calls to a Plivo number answered by a Dograh AI voice agent that books appointments. Call history, transcripts, and push notifications are stored/sent locally (SQLite + Firebase Cloud Messaging).
+CallFlow forwards a business's missed calls to a Telnyx number answered by a Dograh AI voice agent that books appointments. Call history, transcripts, and push notifications are stored/sent locally (SQLite + Firebase Cloud Messaging).
 
-> **Status:** the legacy SignalWire IVR/SMS stack has been deleted. The **Dograh
-> end-of-call webhook is live** (`POST /api/webhooks/dograh`, see [Call flow](#call-flow-plivo--dograh)),
-> the **Dodo hosted-checkout billing path is live** (see [Billing](#billing-dodo-payments)),
-> and the **self-serve forwarding wizard** (carrier dropdown, `tel:` link, silent
-> test-call + SMS verification) is built. Remaining: live VPS deploy, live
-> credentials for Plivo/Dograh/Dodo, and first customers.
+> **Legacy cleanup (build brief step 6):** the SignalWire, Plivo and TextBelt
+> code, routes and env vars have been removed. Telephony is Telnyx + Dograh only;
+> any Plivo or SMS mention left further down this document is historical.
+>
+> **Status:** the Dograh end-of-call webhook is live (`POST /api/webhooks/dograh`)
+> and stores unmatched calls unlinked, the Dodo hosted-checkout billing path is
+> live, and the self-serve flow (signup -> `/onboarding` 1-4 -> dashboard) is live
+> on the VPS. Call-alert email and the day-2 trial email are wired to SMTP.
 
 ## Tech stack
 
@@ -33,9 +35,9 @@ Copy `.env.example` to `.env.local` and fill in real values:
 
 | Variable | Purpose |
 |---|---|
-| `PLIVO_AUTH_ID` | Plivo auth ID (forwarding test calls — Phase 3) |
-| `PLIVO_AUTH_TOKEN` | Plivo auth token |
-| `PLIVO_NUMBER` | Your Plivo number (E.164) that missed calls forward to |
+| `TELNYX_API_KEY` | Telnyx API key (call transfers + the unavailable-message speak action) |
+| `TELNYX_PUBLIC_KEY` | Telnyx webhook signing key (Mission Control -> API Keys) |
+| `TELNYX_NUMBER` / `TELNYX_FORWARD_TO` | The CallFlow number and the Dograh agent number |
 | `TELNYX_API_KEY` | Telnyx API key (Call Control transfer commands) |
 | `TELNYX_PUBLIC_KEY` | Telnyx webhook public key (Ed25519 signature verification) — Mission Control → API Keys → Public Key |
 | `TELNYX_NUMBER` | Your Telnyx number (E.164) that missed calls forward to |
@@ -549,7 +551,6 @@ env-var needs and is kept for reference.
 | `DATABASE_PATH` | **Required on Render.** Absolute path on the persistent disk mount (see below). Render sets `RENDER=1`, which arms the guard: if the value is omitted, relative, or inside the project directory, the app **refuses to open the database** and every DB route returns 500 with an explanatory error — no silent data loss. |
 | `CORS_ORIGINS` | Comma-separated list of your own origins, e.g. `https://callflow.biz,https://www.callflow.biz`. **Unset means `*`** (any site may call the API). Origins must match exactly, no trailing slash; the app's own pages are same-origin so need no entry. Limits browser JS from other sites only — it is not a substitute for auth. |
 | `APP_AUTH_TOKEN` | Leave **unset** at launch — setting it breaks dashboard writes until the client-side token gap is fixed. See [Auth](#auth). |
-| `PLIVO_*` | Legacy — Plivo is not in use (the live provider is Telnyx); kept for old code, harmless if unset |
 | `FIREBASE_SERVICE_ACCOUNT` | Firebase service account JSON (single-line or base64) |
 | `PUBLIC_BASE_URL` | Not read by any code yet — set it for future webhook use (Phases 3–4); harmless today |
 
@@ -636,7 +637,7 @@ project, since that directory is replaced on every deploy).
 
 Only these two are needed to run the site. Everything else is optional and fails
 soft when absent (Firebase is checked lazily and only affects push notifications,
-never boot; Plivo is legacy and not in use):
+never boot):
 
 ```
 DATABASE_PATH=/var/data/callflow.db
@@ -721,4 +722,4 @@ issuing the certificate before pointing `PUBLIC_BASE_URL` at the domain.
 After deploy, point the Telnyx answer webhook (`/api/v1/telephony/telnyx/answer`)
 and the Dograh end-of-call webhook (`/api/webhooks/dograh`, template + curl tests
 above) at `https://<your-app-on-render>.onrender.com/...` (`PUBLIC_BASE_URL` must
-match). Plivo is legacy and not wired to anything live.
+match).
