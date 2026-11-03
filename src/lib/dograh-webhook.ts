@@ -59,9 +59,10 @@ const PUSH_TITLES: Record<CallStatus, string> = {
  * parser accepts (see dograh.ts) — and there is exactly ONE routing rule:
  * an exact match on businesses.assignedNumber (normalized) — the per-business
  * DID the number pool bound to that business. There is no shared-number
- * fallback and no legacy phoneNumber match: a call whose called_number
- * matches no business's assignedNumber is logged loudly and dropped (the
- * handler still answers 200, but no row is stored).
+ * fallback and no legacy phoneNumber match: a call whose called_number matches
+ * no business's assignedNumber is logged loudly and then STORED with
+ * businessId = NULL (see handleDograhWebhook), so it shows up under
+ * /admin/calls → "Unlinked only" instead of being lost.
  */
 export async function matchDograhBusiness(calledNumber: string) {
   if (calledNumber) {
@@ -75,12 +76,15 @@ export async function matchDograhBusiness(calledNumber: string) {
     }
   }
   console.warn(
-    `[dograh-webhook] Call NOT stored: called_number "${calledNumber || "(missing)"}" ` +
-      "matches no business's assignedNumber (the only match rule). If these calls " +
-      "should be recorded, assign that number to a business from the pool (/admin/numbers)."
+    `[dograh-webhook] No business owns the dialled number "${
+      calledNumber || "(missing)"
+    }" (matched against assignedNumber — the only rule). The call is still ` +
+      "recorded: it is stored unlinked (businessId NULL) and shows up under " +
+      '/admin/calls → "Unlinked only" until a number is assigned to a business.'
   );
   return null;
 }
+
 
 /**
  * End-of-call webhook status → the calls.callStatus enum. An end-of-call
@@ -142,18 +146,10 @@ export async function handleDograhWebhook(opts: {
     };
   }
 
-  // TEMP-DEBUG (remove together with the route's [DOGRAH-DEBUG] log): what the
-  // parser ACTUALLY extracted. An empty calledNumber here, next to a `to` field
-  // logged EMPTY by the route, proves the Dograh template rendered the value
-  // EMPTY (an unknown variable), not that the field name/level is wrong.
-  console.log(
-    `[dograh-webhook][TEMP-DEBUG] parsed callId=${payload.callId} calledNumber="${payload.calledNumber}"`
-  );
-
-  // 4. A payload with no dialled number cannot be routed — step 5 drops it.
-  //    Log WHICH top-level keys arrived (NAMES only, never values: a value can
-  //    be a phone number or a transcript) so a mis-templated Dograh webhook is
-  //    diagnosable from a single log line.
+  // 4. A payload with no dialled number cannot be routed. Log WHICH top-level
+  //    keys arrived (NAMES only, never values: a value can be a phone number or
+  //    a transcript) so a mis-templated Dograh webhook is diagnosable from a
+  //    single log line. The call is still stored below (unlinked).
   if (!payload.calledNumber) {
     console.warn(
       "[dograh-webhook] No called number in the payload (tried called_number, to, " +
@@ -164,24 +160,35 @@ export async function handleDograhWebhook(opts: {
 
   // 5. Match the business by the dialled number (the ONE rule), then persist —
   //    the same callId always UPDATEs the existing row (never a duplicate) and
-  //    the exact payload is kept beside the row for debugging. An unmatched
-  //    call is never stored: the dialled number belongs to no business here.
+  //    the exact payload is kept beside the row for debugging. An UNMATCHED
+  //    call is NOT dropped: it is stored with businessId = NULL so the admin
+  //    panel can show it (/admin/calls → "Unlinked only"). Only authenticated
+  //    payloads carrying a callId ever reach this point.
   const business = await matchDograhBusiness(payload.calledNumber);
   if (!business) {
-    return { status: 200, body: { ok: true }, created: false, pushPlan: null };
+    // Nobody owns the dialled number: keep the call anyway (brief Step 1 —
+    // "unmatched calls must be saved with business_id = NULL, never dropped")
+    // and log the payload's KEY NAMES only (never values) so a mis-templated
+    // Dograh webhook stays diagnosable from one line.
+    console.warn(
+      `[dograh-webhook] Storing call ${payload.callId} UNLINKED (businessId NULL). ` +
+        `Payload keys: ${describeTopLevelKeys(opts.body)}`
+    );
   }
 
   // Onboarding auto-completion: a live call attributed to a business waiting
   // on step 4 (verify) is proof the owner's forwarding works — advance the
   // linear /onboarding flow to done. Never regress a finished business.
-  if (business.onboardingStep === "4") {
+  if (business?.onboardingStep === "4") {
     await updateBusiness(business.id, { onboardingStep: "done" });
   }
 
-  const fcmToken = await getBusinessFcmToken();
+  // Owner pushes target one device token; an unmatched call has no business to
+  // notify, so skip the lookup entirely.
+  const fcmOwner = business ? await getBusinessFcmToken() : "";
   const { id, created } = await upsertDograhCall({
     callId: payload.callId,
-    businessId: business.id,
+    businessId: business?.id ?? null,
     callerNumber: payload.callerNumber || "unknown",
     businessNumber: payload.calledNumber,
     callStatus: toCallStatus(payload.status),
@@ -191,12 +198,13 @@ export async function handleDograhWebhook(opts: {
     rawPayload: JSON.stringify(opts.body ?? null),
   });
 
-  // 6. Owner push — for NEW calls only (replays/updates of the same callId
-  //    must not re-notify). The plan is executed AFTER the response by the
-  //    route via after(), so it can never delay or fail the 200.
+  // 6. Owner push — for NEW, ATTRIBUTED calls only (replays/updates of the
+  //    same callId must not re-notify; an unlinked call has no owner). The plan
+  //    is executed AFTER the response by the route via after(), so it can never
+  //    delay or fail the 200.
   let pushPlan: OwnerPushPlan | null = null;
-  if (created) {
-    if (fcmToken) {
+  if (created && business) {
+    if (fcmOwner) {
       const who = payload.customerName || payload.callerNumber || "A caller";
       const duration =
         payload.durationSeconds === null ? "" : ` (${payload.durationSeconds}s)`;
@@ -204,7 +212,7 @@ export async function handleDograhWebhook(opts: {
         ? `. Call back: ${payload.callerNumber}`
         : "";
       pushPlan = {
-        fcmToken,
+        fcmToken: fcmOwner,
         title: PUSH_TITLES[toCallStatus(payload.status)],
         body: `Call from ${who}${duration}${callBack}`,
         data: { callId: id, callerNumber: payload.callerNumber || "unknown" },

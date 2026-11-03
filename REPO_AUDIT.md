@@ -339,6 +339,9 @@ Read by the app: `DATABASE_PATH`, `DB_REQUIRE_PERSISTENT_PATH`, `NODE_ENV`,
 
 ## 8. Broken / unfinished, mapped to brief steps
 
+> Status: item **2 (unmatched calls dropped)** is fixed — see `PROGRESS.md` Step 1.
+> The rest is the queue for the steps that follow.
+
 1. **Call-alert email is never sent** — `sendCallAlertEmail()` in
    `src/lib/email.ts` has zero callers; `dograh-webhook.ts` only does an FCM push
    (and `.env.example` says email is "NOT used by the Dograh webhook"). → Step 4.

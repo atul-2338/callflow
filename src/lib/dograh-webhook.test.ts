@@ -214,16 +214,20 @@ describe("happy path + persistence", () => {
     });
   });
 
-  it("does NOT store a call whose called_number matches no business", async () => {
+  it("STORES a call whose called_number matches no business, unlinked", async () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     const res = await fire({ callId: "nomatch-1", called_number: "+19999999999" });
     expect(res.status).toBe(200);
     expect(res.body).toEqual({ ok: true });
-    expect(res.created).toBe(false);
-    expect(res.pushPlan).toBeNull();
+    // A new row IS created — brief Step 1: unmatched calls are never dropped.
+    expect(res.created).toBe(true);
+    expect(res.pushPlan).toBeNull(); // no owner to notify
     const { getCallByDograhRunId } = await import("./db");
-    expect(await getCallByDograhRunId("nomatch-1")).toBeNull();
-    expect(warn).toHaveBeenCalledWith(expect.stringContaining("NOT stored"));
+    const row = await getCallByDograhRunId("nomatch-1");
+    expect(row).not.toBeNull();
+    expect(row!.businessId).toBeNull();
+    expect(row!.businessNumber).toBe("+19999999999");
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining("UNLINKED"));
     warn.mockRestore();
   });
 
@@ -259,9 +263,11 @@ describe("happy path + persistence", () => {
       },
       headers: authHeaders(),
     });
-    expect(res.status).toBe(200); // an un-routable call is dropped, never retried
+    expect(res.status).toBe(200); // stored, so it is never re-processed
     const { getCallByDograhRunId } = await import("./db");
-    expect(await getCallByDograhRunId("nocalled-1")).toBeNull();
+    const row = await getCallByDograhRunId("nocalled-1");
+    expect(row).not.toBeNull();
+    expect(row!.businessId).toBeNull();
 
     expect(warn).toHaveBeenCalledWith(
       expect.stringContaining("Top-level keys: callId, status, transcript")
@@ -412,13 +418,15 @@ describe("business matching — assignedNumber (per-business DID)", () => {
     expect((await getCallByDograhRunId("assigned-3"))!.businessId).toBe(bizAId);
   });
 
-  it("answers 200 WITHOUT storing a row for an empty called_number", async () => {
+  it("answers 200 and stores an UNLINKED row for an empty called_number", async () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     const res = await fire({ callId: "assigned-empty-1", called_number: "" });
     expect(res.status).toBe(200);
     const { getCallByDograhRunId } = await import("./db");
-    expect(await getCallByDograhRunId("assigned-empty-1")).toBeNull();
-    expect(warn).toHaveBeenCalledWith(expect.stringContaining("NOT stored"));
+    const row = await getCallByDograhRunId("assigned-empty-1");
+    expect(row).not.toBeNull();
+    expect(row!.businessId).toBeNull();
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining("UNLINKED"));
     warn.mockRestore();
   });
 
@@ -439,14 +447,17 @@ describe("business matching — assignedNumber (per-business DID)", () => {
     await updateBusiness(bizAId, { onboardingStep: "1" });
   });
 
-  it("drops calls that only match a business's phoneNumber (no legacy fallback)", async () => {
+  it("stores an unlinked call when only a business's phoneNumber matches (no legacy fallback)", async () => {
     // bizA's OWNER number is +15550002222 but its assigned DID is +15550006101:
-    // a call dialled to the owner number is not a CallFlow call.
+    // a call dialled to the owner number is not a CallFlow call, so it is kept
+    // as an unlinked row (businessId NULL) rather than attributed.
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     const res = await fire({ callId: "assigned-owner-1", called_number: "+15550002222" });
     expect(res.status).toBe(200);
     const { getCallByDograhRunId } = await import("./db");
-    expect(await getCallByDograhRunId("assigned-owner-1")).toBeNull();
+    const row = await getCallByDograhRunId("assigned-owner-1");
+    expect(row).not.toBeNull();
+    expect(row!.businessId).toBeNull();
     warn.mockRestore();
   });
 });

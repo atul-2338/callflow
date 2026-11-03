@@ -167,7 +167,8 @@ export interface Business {
    * caller dials that belongs to THIS business. E.164 with leading "+", or
    * null when the business is pending a number (empty pool or released).
    * Dograh attribution matches called_number against ONLY this field —
-   * unmatched calls are logged and answered 200 without a row. Distinct from
+   * a call that matches nothing is still SAVED, with businessId = NULL, and
+   * appears under /admin/calls → "Unlinked only" (never dropped). Distinct from
    * phoneNumber, which is the OWNER's real business number (used for the
    * forwarding-instruction area-code preference and shown in admin).
    */
