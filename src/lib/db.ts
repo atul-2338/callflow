@@ -810,6 +810,54 @@ export async function getBusinessByCheckoutSessionId(
     .get(sessionId) as BusinessRow | undefined;
   return row ? mapBusiness(row) : undefined;
 }
+/**
+ * Claim one of `candidates` as this business's number, in ONE SQLite
+ * transaction, and only while the business still has no number.
+ *
+ * This is the atomic step behind automatic assignment: reading
+ * `assignedNumber`, checking that a candidate is not already in use, and the
+ * write all happen inside the same transaction, so two signups finishing at the
+ * same instant can never walk away with the same number — the loser sees the
+ * winner's value (for the same business) or simply gets nothing back and tries
+ * again later. It is idempotent by construction: a business that already has a
+ * number keeps it and no candidate is touched.
+ *
+ * Returns the business's number after the call, or `null` when nothing could be
+ * claimed. Never throws for "already taken" — that is a normal outcome.
+ */
+export async function claimBusinessNumber(
+  businessId: string,
+  candidates: string[]
+): Promise<string | null> {
+  const db = getDb();
+  const claim = db.transaction((id: string, numbers: string[]): string | null => {
+    const row = db
+      .prepare("SELECT assignedNumber FROM businesses WHERE id = ?")
+      .get(id) as { assignedNumber: string | null } | undefined;
+    if (!row) return null;
+    // Someone (the webhook, the checkout return, an admin click) got here first.
+    if (row.assignedNumber) return row.assignedNumber;
+
+    const inUse = db.prepare(
+      "SELECT 1 FROM businesses WHERE assignedNumber = ? LIMIT 1"
+    );
+    const assign = db.prepare(
+      "UPDATE businesses SET assignedNumber = ?, updatedAt = ? WHERE id = ? AND assignedNumber IS NULL"
+    );
+    const now = new Date().toISOString();
+
+    for (const number of numbers) {
+      if (!number || inUse.get(number)) continue;
+      // `AND assignedNumber IS NULL` makes a concurrent winner's number win.
+      if (assign.run(number, now, id).changes === 1) return number;
+    }
+    return null;
+  });
+
+  return claim(businessId, candidates);
+}
+
+
 
 export interface DodoWebhookUpdate {
   webhookId: string;

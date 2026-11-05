@@ -180,12 +180,17 @@ export default function OwnerOnboarding({
       });
       const data = (await res.json()) as {
         onboardingStep?: string;
+        assignedNumber?: string | null;
+        pending?: boolean;
         error?: string;
       };
       if (!res.ok) {
         setError(data.error || "Could not save the step.");
         return;
       }
+      // A claim made on this call (pool restocked since signup) shows up here,
+      // so the pending card turns into the real number without a reload.
+      if (data.assignedNumber) setAssignedNumber(data.assignedNumber);
       setStep(data.onboardingStep ?? next);
       if (next === "done") router.refresh();
     } catch {
@@ -369,13 +374,31 @@ export default function OwnerOnboarding({
                 Your number is being prepared
               </h1>
               <p className="mt-3 text-sm leading-relaxed text-ink-2">
-                We&apos;ll email you within 24 h — as soon as your number is
-                ready this page updates automatically.
+                Your number is being prepared, we&apos;ll email you — as soon as
+                it is ready this page shows it automatically.
               </p>
               <div className="mt-4 flex items-center justify-center gap-2 text-xs text-ink-3">
                 <Loader2 className="h-3.5 w-3.5 animate-spin" /> Waiting for a
                 number…
               </div>
+              {/* Continue re-checks the pool on the server, so a restock is
+                  picked up without an admin assigning anything. */}
+              <button
+                type="button"
+                onClick={() => advanceStep("3")}
+                disabled={busy}
+                className="ios-pill-primary mt-6 flex w-full items-center justify-center px-4 py-3.5 text-[15px] disabled:opacity-60"
+              >
+                {busy ? (
+                  <>
+                    <Loader2 className="h-4 w-4 animate-spin" /> Checking…
+                  </>
+                ) : (
+                  <>
+                    Continue <ArrowRight className="h-4 w-4" />
+                  </>
+                )}
+              </button>
             </>
           )}
         </div>

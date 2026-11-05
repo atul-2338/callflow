@@ -3,7 +3,7 @@ import os from "os";
 import path from "path";
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { closeDb } from "@/lib/database";
-import { createBusiness } from "@/lib/db";
+import { createBusiness, getBusinessById } from "@/lib/db";
 import {
   businessSessionCookieName,
   createBusinessSessionToken,
@@ -45,7 +45,25 @@ const TEST_DB_PATH = path.join(
   os.tmpdir(),
   `callflow-billing-confirm-test-${process.pid}-${Date.now()}.db`
 );
+// Automatic number assignment happens on a confirmed checkout, so the pool must
+// be a throwaway file too — never ./data/phone_numbers.json.
+const TEST_POOL_PATH = path.join(
+  os.tmpdir(),
+  `callflow-billing-confirm-pool-${process.pid}-${Date.now()}.json`
+);
 process.env.DATABASE_PATH = TEST_DB_PATH;
+process.env.NUMBERS_POOL_PATH = TEST_POOL_PATH;
+
+/** Keep the temp pool stocked so confirmed checkouts can claim a number. */
+function seedPool(count = 12) {
+  const entries = Array.from({ length: count }, (_, index) => ({
+    number: `+1555010${String(2000 + index)}`,
+    status: "available",
+    businessId: null,
+    assignedAt: null,
+  }));
+  fs.writeFileSync(TEST_POOL_PATH, JSON.stringify(entries));
+}
 
 type NewBusiness = Parameters<typeof createBusiness>[0];
 
@@ -98,6 +116,8 @@ describe("POST /api/billing/confirm", () => {
     vi.stubEnv("BUSINESS_SESSION_SECRET", TEST_SECRET);
     dodoMocks.subscriptionRetrieve.mockReset();
     dodoMocks.subscriptionList.mockReset();
+    // Fresh pool per test: every confirmed checkout may claim one number.
+    seedPool();
   });
 
   afterAll(() => {
@@ -105,6 +125,7 @@ describe("POST /api/billing/confirm", () => {
     for (const suffix of ["", "-wal", "-shm"]) {
       fs.rmSync(`${TEST_DB_PATH}${suffix}`, { force: true });
     }
+    fs.rmSync(TEST_POOL_PATH, { force: true });
   });
 
   it("valid session cookie: 200 trusted state, no cookies touched", async () => {
@@ -559,5 +580,41 @@ describe("POST /api/billing/confirm", () => {
     // access, so the trial clock has not started either.
     expect(body.trialStartedAt).toBeNull();
     expect((body.access as { entitled: boolean }).entitled).toBe(false);
+  });
+
+  it("confirmed active checkout with no number: the number is assigned automatically", async () => {
+    // The case that used to need an admin click: paid, active subscription, and
+    // no assignedNumber (Dodo's webhook lagged or never delivered).
+    const business = await createBusiness(
+      seedBusiness({
+        phoneNumber: "+12125550061",
+        dodoCustomerId: "cus_confirm_auto",
+        dodoSubscriptionId: "sub_confirm_auto",
+        dodoCheckoutSessionId: "cs_confirm_auto",
+        subscriptionStatus: "active",
+        billingName: "Auto Number Biz",
+      })
+    );
+
+    const response = await POST(
+      confirmRequest({
+        cookie: `callflow_business_session=${createBusinessSessionToken(business.id)}`,
+      })
+    );
+
+    expect(response.status).toBe(200);
+    // A number came from the pool (which entry is first depends on the rows
+    // earlier tests in this file left behind — the claim is what matters).
+    const assigned = (await getBusinessById(business.id))?.assignedNumber;
+    expect(assigned).toMatch(/^\+1555010\d{4}$/);
+
+    // Polling again must not consume a second number (idempotent + atomic).
+    const again = await POST(
+      confirmRequest({
+        cookie: `callflow_business_session=${createBusinessSessionToken(business.id)}`,
+      })
+    );
+    expect(again.status).toBe(200);
+    expect((await getBusinessById(business.id))?.assignedNumber).toBe(assigned);
   });
 });

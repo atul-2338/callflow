@@ -106,13 +106,21 @@ export async function POST(request: Request) {
       status: normalized.subscriptionStatus,
     });
 
-    // Auto-assign pool number on first activation if not already assigned.
-    if (normalized.eventType === "subscription.active") {
+    // Auto-assign the pool number the moment the business is ACTIVE — keyed to
+    // the resulting state, not to one event name. Dodo reports activation as
+    // `subscription.active`, but `.created`, `.plan_changed` and `.renewed` carry
+    // the same authoritative status; keying on the name alone left paying
+    // customers without a number (an admin had to click "Assign number").
+    // assignNumber is idempotent and atomic, so a retry/replay is free.
+    if (normalized.eventType.startsWith("subscription.")) {
       const business = await getBusinessById(result.businessId);
-      if (business && !business.assignedNumber) {
+      if (business && business.subscriptionStatus === "active" && !business.assignedNumber) {
         const poolResult = await assignNumber(result.businessId, business.phoneNumber);
         if (poolResult.pending) {
-          console.error("[dodo-webhook] pool empty — no number assigned to", result.businessId);
+          console.error(
+            "[dodo-webhook] pool empty — no number assigned to",
+            result.businessId
+          );
         } else {
           console.info("[dodo-webhook] pool number assigned", {
             businessId: result.businessId,

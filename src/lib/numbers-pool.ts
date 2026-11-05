@@ -1,7 +1,7 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";
 import path from "path";
 
-import { getBusinessById, getAllBusinesses, updateBusiness } from "./db";
+import { getBusinessById, getAllBusinesses, claimBusinessNumber, updateBusiness } from "./db";
 import { readSmtpConfig, sendOperatorAlertEmail } from "./email";
 import { isValidPoolNumber, normalizeOwnerPhone, usAreaCode } from "./phone";
 import type { Business } from "./types";
@@ -121,8 +121,18 @@ export interface AssignNumberResult {
 /**
  * Assign the next available pool number to `businessId` and mirror it into
  * businesses.assignedNumber. Prefers a number in the same area code as the
- * owner's phone, otherwise the first available entry. Idempotent: a business
- * that already has an assignedNumber keeps it (never double-assigned).
+ * owner's phone, otherwise the first available entry.
+ *
+ * Exactly-once and safe to call from anywhere: the whole claim
+ * (`assignedNumber` read, "is it in use?" check, write) runs in ONE SQLite
+ * transaction via `claimBusinessNumber`, so two simultaneous signups can never
+ * receive the same number, and a business that already has a number keeps it.
+ * Called by the Dodo webhook, the checkout return page, the onboarding flow and
+ * the admin "Assign number" override.
+ *
+ * The pool file is bookkeeping, not the source of truth: a candidate that a
+ * business row already uses is skipped even if the file still says "available"
+ * (and a failed file write is logged, never fatal).
  */
 export async function assignNumber(
   businessId: string,
@@ -137,33 +147,85 @@ export async function assignNumber(
   }
 
   const entries = readPool();
-  const available = entries.filter((e) => e.status === "available");
-  if (available.length === 0) {
-    await alertPoolEmpty(business);
+  const inUse = new Set(
+    (await getAllBusinesses())
+      .map((b) => b.assignedNumber)
+      .filter((n): n is string => typeof n === "string" && n.length > 0)
+  );
+  const usable = entries.filter(
+    (e) => e.status === "available" && !inUse.has(e.number)
+  );
+
+  // Area-code preference: the owner's own area first, then the rest in file
+  // order, so a "local-looking" number is still preferred without ever failing
+  // to assign when the exact area is out of stock.
+  const ownerE164 = ownerPhone ? normalizeOwnerPhone(ownerPhone) : null;
+  const area = ownerE164 ? usAreaCode(ownerE164) : null;
+  const ordered = area
+    ? [
+        ...usable.filter((e) => usAreaCode(e.number) === area),
+        ...usable.filter((e) => usAreaCode(e.number) !== area),
+      ]
+    : usable;
+
+  const claimed = await claimBusinessNumber(
+    businessId,
+    ordered.map((e) => e.number)
+  );
+
+  if (!claimed) {
+    // A concurrent claim for THIS business may have just won; take its number.
+    const fresh = await getBusinessById(businessId);
+    if (fresh?.assignedNumber) {
+      return { assignedNumber: fresh.assignedNumber, pending: false };
+    }
+    if (usable.length === 0) await alertPoolEmpty(business);
     return { assignedNumber: null, pending: true };
   }
 
-  const ownerE164 = ownerPhone ? normalizeOwnerPhone(ownerPhone) : null;
-  const area = ownerE164 ? usAreaCode(ownerE164) : null;
-  const preferred =
-    (area && available.find((e) => usAreaCode(e.number) === area)) || available[0];
-
-  preferred.status = "assigned";
-  preferred.businessId = businessId;
-  preferred.assignedAt = new Date().toISOString();
-  writePool(entries);
-
-  await updateBusiness(businessId, { assignedNumber: preferred.number });
+  // Mirror the claim into the pool file (best effort — the business row already
+  // decides routing, and a stale "available" entry can never be re-assigned
+  // because it is skipped above).
+  try {
+    const current = readPool();
+    const entry = current.find((e) => e.number === claimed);
+    const assignedAt = new Date().toISOString();
+    if (entry) {
+      entry.status = "assigned";
+      entry.businessId = businessId;
+      entry.assignedAt = assignedAt;
+    } else {
+      current.push({ number: claimed, status: "assigned", businessId, assignedAt });
+    }
+    writePool(current);
+  } catch (error) {
+    console.error("[numbers-pool] number assigned but the pool file could not be updated", {
+      businessId,
+      assignedNumber: claimed,
+      message: error instanceof Error ? error.message : "unknown",
+    });
+  }
 
   // Pool stock alert (brief Step 2): with 3 or fewer free numbers left, email the
   // operator so the pool can be restocked before a signup finds it empty. The
   // console line always fires; the email is best-effort and never throws.
-  const remaining = entries.filter((e) => e.status === "available").length;
+  let remaining = 0;
+  try {
+    remaining = poolCounts().available;
+  } catch {
+    remaining = 0;
+  }
   if (remaining <= LOW_POOL_THRESHOLD) {
     await alertPoolLowStock(remaining);
   }
 
-  return { assignedNumber: preferred.number, pending: false };
+  console.info("[numbers-pool] assigned", {
+    businessId,
+    assignedNumber: claimed,
+    remaining,
+  });
+
+  return { assignedNumber: claimed, pending: false };
 }
 
 /**
@@ -338,17 +400,18 @@ async function alertPoolLowStock(remaining: number): Promise<void> {
 }
 
 /**
- * Pool-empty alert: ALWAYS a loud console.error, plus a best-effort email via
- * the existing SMTP code (to the business's notification email, falling back
- * to the SMTP sender). Never throws — signup must not crash because the pool
- * ran dry.
+ * Pool-empty alert: ALWAYS a loud console.error, plus best-effort emails via the
+ * existing SMTP code — the business ("your number is being prepared, we'll email
+ * you") AND the operator/admin address (`LEADS_NOTIFY_EMAIL`, falling back to the
+ * SMTP sender), because a paying customer is now waiting on a restock. Never
+ * throws: a sale must not fail because an alert could not be sent.
  */
 async function alertPoolEmpty(business: Business): Promise<void> {
   const who = business.billingName ?? business.clientUid ?? business.id;
   console.error(
     `[numbers-pool] POOL EMPTY — no available numbers in ${poolFilePath()}. ` +
       `Business "${who}" (${business.clientUid ?? business.id}) is waiting for a number. ` +
-      `Add numbers in /admin/numbers (or data/phone_numbers.json) and re-run onboarding within 24 h.`
+      `Add numbers in /admin/numbers (or data/phone_numbers.json); it is assigned automatically on the next check.`
   );
   const config = readSmtpConfig();
   if (!config) {
@@ -370,5 +433,23 @@ async function alertPoolEmpty(business: Business): Promise<void> {
   );
   if (!result.sent) {
     console.error(`[numbers-pool] Pool-empty email not sent: ${result.error}`);
+  }
+
+  // Admin/operator copy of the same event: the pool needs restocking, and the
+  // number is handed out automatically as soon as numbers are added.
+  const adminTo = normalizeEnvValue(process.env.LEADS_NOTIFY_EMAIL) || config.from;
+  const adminResult = await sendOperatorAlertEmail(
+    config,
+    adminTo,
+    "CallFlow: number pool EMPTY — a customer is waiting",
+    `The number pool is empty, so a paid signup has no number yet.\n\n` +
+      `Business: ${who} (${business.clientUid ?? business.id})\n` +
+      `Owner email: ${business.billingEmail ?? "(none on file)"}\n\n` +
+      `Paste new numbers on /admin/numbers (one per line). The waiting business ` +
+      `gets one automatically on its next check — no manual assignment needed.\n\n` +
+      `— Callflow`
+  );
+  if (!adminResult.sent) {
+    console.error(`[numbers-pool] Pool-empty admin alert not sent: ${adminResult.error}`);
   }
 }

@@ -156,6 +156,90 @@ describe("assignNumber", () => {
     expect(errorSpy.mock.calls.some((call) => String(call[0]).includes("POOL EMPTY"))).toBe(true);
     errorSpy.mockRestore();
   });
+
+  it("never hands the same number to two businesses", async () => {
+    fs.writeFileSync(
+      poolPath(),
+      JSON.stringify([
+        { number: "+15550100001", status: "available", businessId: null, assignedAt: null },
+        { number: "+15550100002", status: "available", businessId: null, assignedAt: null },
+      ])
+    );
+    const first = await makeBusiness("+13125550101");
+    const second = await makeBusiness("+13125550202");
+
+    const [a, b] = await Promise.all([
+      assignNumber(first.id, first.phoneNumber),
+      assignNumber(second.id, second.phoneNumber),
+    ]);
+
+    expect(a.assignedNumber).toBeTruthy();
+    expect(b.assignedNumber).toBeTruthy();
+    expect(a.assignedNumber).not.toBe(b.assignedNumber);
+
+    const { getBusinessById } = await import("./db");
+    expect((await getBusinessById(first.id))?.assignedNumber).toBe(a.assignedNumber);
+    expect((await getBusinessById(second.id))?.assignedNumber).toBe(b.assignedNumber);
+    // The pool file agrees with the two rows: exactly two entries assigned.
+    expect(listPool().filter((e) => e.status === "assigned")).toHaveLength(2);
+  });
+
+  it("is atomic per business: concurrent calls for one business agree", async () => {
+    fs.writeFileSync(
+      poolPath(),
+      JSON.stringify([
+        { number: "+15550100001", status: "available", businessId: null, assignedAt: null },
+        { number: "+15550100002", status: "available", businessId: null, assignedAt: null },
+      ])
+    );
+    const business = await makeBusiness("+13125550102");
+
+    const [first, second] = await Promise.all([
+      assignNumber(business.id, business.phoneNumber),
+      assignNumber(business.id, business.phoneNumber),
+    ]);
+
+    expect(first.assignedNumber).toBe("+15550100001");
+    expect(second.assignedNumber).toBe("+15550100001");
+    // The second call consumed nothing: one assigned, one still free.
+    const pool = listPool();
+    expect(pool.filter((e) => e.status === "assigned")).toHaveLength(1);
+    expect(pool.filter((e) => e.status === "available")).toHaveLength(1);
+  });
+
+  it("skips a pool number a business row already uses, even if the file says available", async () => {
+    // Simulates a crashed/partial earlier assignment: the DB won, the file did not.
+    fs.writeFileSync(
+      poolPath(),
+      JSON.stringify([
+        { number: "+15550100001", status: "available", businessId: null, assignedAt: null },
+        { number: "+15550100002", status: "available", businessId: null, assignedAt: null },
+      ])
+    );
+    const squatter = await makeBusiness("+13125550103");
+    await updateBusinessRow(squatter.id, { assignedNumber: "+15550100001" });
+
+    const business = await makeBusiness("+13125550104");
+    const result = await assignNumber(business.id, business.phoneNumber);
+
+    expect(result.assignedNumber).toBe("+15550100002");
+  });
+
+  it("treats a business that already has a number as done, without touching the pool", async () => {
+    fs.writeFileSync(
+      poolPath(),
+      JSON.stringify([
+        { number: "+15550100001", status: "available", businessId: null, assignedAt: null },
+      ])
+    );
+    const business = await makeBusiness("+13125550105");
+    await updateBusinessRow(business.id, { assignedNumber: "+15550100999" });
+
+    const result = await assignNumber(business.id, business.phoneNumber);
+
+    expect(result).toEqual({ assignedNumber: "+15550100999", pending: false });
+    expect(listPool()[0].status).toBe("available");
+  });
 });
 
 describe("releaseNumber", () => {

@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 
 import { businessIdFromCookieHeader } from "@/lib/business-session";
 import { getBusinessById, updateBusiness } from "@/lib/db";
+import { assignNumber } from "@/lib/numbers-pool";
 
 export const runtime = "nodejs";
 
@@ -12,6 +13,12 @@ export const runtime = "nodejs";
  * "Skip — I'll test later" link). Step '2' is reached only through
  * /api/onboarding/start (which assigns the number) and 'done' is also set by
  * the Dograh webhook on the business's first attributed call.
+ *
+ * Leaving step 2 is the last automatic chance to get a number: if the business
+ * still has none (pool was empty at signup and has since been restocked), this
+ * route assigns one before it allows the forwarding step. An empty pool is
+ * answered as `pending: true` with the step unchanged — the page keeps showing
+ * "Your number is being prepared", never an error.
  */
 export async function POST(request: Request) {
   const businessId = businessIdFromCookieHeader(request.headers.get("cookie"));
@@ -44,12 +51,27 @@ export async function POST(request: Request) {
     );
   }
   if (next === "3" && !business.assignedNumber) {
-    return NextResponse.json(
-      { error: "No CallFlow number assigned yet." },
-      { status: 400 }
-    );
+    // Last automatic chance to get a number: the pool may have been restocked
+    // since signup (or the webhook never ran). assignNumber is atomic and
+    // idempotent, so clicking twice cannot double-assign.
+    const assignment = await assignNumber(businessId, business.phoneNumber);
+    if (!assignment.assignedNumber) {
+      // Pool still empty — NOT an error page: stay on step 2, which shows
+      // "Your number is being prepared, we'll email you".
+      return NextResponse.json({
+        onboardingStep: business.onboardingStep,
+        assignedNumber: null,
+        pending: true,
+      });
+    }
   }
 
   const updated = await updateBusiness(businessId, { onboardingStep: next });
-  return NextResponse.json({ onboardingStep: updated?.onboardingStep ?? next });
+  const assignedNumber =
+    (await getBusinessById(businessId))?.assignedNumber ?? business.assignedNumber;
+  return NextResponse.json({
+    onboardingStep: updated?.onboardingStep ?? next,
+    assignedNumber,
+    pending: false,
+  });
 }

@@ -12,6 +12,7 @@ import {
   trialEndsAt,
 } from "@/lib/billing";
 import { getBusinessByCheckoutSessionId, getBusinessById } from "@/lib/db";
+import { assignNumber } from "@/lib/numbers-pool";
 import {
   clearSignupHandoffCookie,
   signupHandoffFromCookieHeader,
@@ -221,6 +222,25 @@ export async function POST(request: Request) {
   }
 
   const access = describeBillingAccess(business);
+
+  // The checkout return is the second place a paid signup becomes known: Dodo's
+  // webhook can lag or be lost (which is exactly why we reconcile above), and a
+  // business with no number used to need a manual assignment. Only a genuinely
+  // active subscription counts, and assignNumber is atomic + idempotent, so
+  // repeated polling is free and two visitors can never share a number.
+  if (
+    !business.assignedNumber &&
+    business.dodoSubscriptionId &&
+    business.subscriptionStatus === "active"
+  ) {
+    const assignment = await assignNumber(business.id, business.phoneNumber);
+    if (assignment.assignedNumber) {
+      console.info("[billing-confirm] number auto-assigned", {
+        businessId: business.id,
+        assignedNumber: assignment.assignedNumber,
+      });
+    }
+  }
   const response = NextResponse.json({
     businessId: business.id,
     subscriptionStatus: business.subscriptionStatus,
