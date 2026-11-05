@@ -331,15 +331,36 @@ describe("resolveBusinessByDodoSubscription", () => {
     expect(resolved).toBeNull();
   });
 
-  it("returns null when Dodo's record names no business or no customer", async () => {
+  it("resolves through Dodo's customer id when the checkout metadata is missing", async () => {
     const ids = uniqueIds();
-    await createBusiness(seed({ phoneNumber: ids.phoneNumber, dodoCustomerId: ids.customerId }));
+    const business = await createBusiness(
+      seed({ phoneNumber: ids.phoneNumber, dodoCustomerId: ids.customerId })
+    );
 
-    const hintless = await resolveBusinessByDodoSubscription(
+    // Dodo does not always echo the checkout metadata onto the subscription.
+    // The customer id is still Dodo's own attribution, and we stored it before
+    // sending the browser to Dodo — so it identifies this business on its own.
+    const resolved = await resolveBusinessByDodoSubscription(
       ids.subscriptionId,
       stubRetrieve(subscriptionRecord(null, ids.customerId, ids.subscriptionId)) as never
     );
-    expect(hintless).toBeNull();
+    expect(resolved?.id).toBe(business.id);
+
+    // Same proof with the metadata field absent entirely.
+    const noMetadataField = await resolveBusinessByDodoSubscription(
+      ids.subscriptionId,
+      stubRetrieve({
+        subscription_id: ids.subscriptionId,
+        status: "active",
+        customer: { customer_id: ids.customerId },
+      }) as never
+    );
+    expect(noMetadataField?.id).toBe(business.id);
+  });
+
+  it("returns null when Dodo's record names a business or customer we do not know", async () => {
+    const ids = uniqueIds();
+    await createBusiness(seed({ phoneNumber: ids.phoneNumber, dodoCustomerId: ids.customerId }));
 
     const noCustomer = await resolveBusinessByDodoSubscription(
       ids.subscriptionId,
@@ -347,6 +368,16 @@ describe("resolveBusinessByDodoSubscription", () => {
     );
     expect(noCustomer).toBeNull();
 
+    // A customer that belongs to no business of ours is not a proof.
+    const unknownCustomer = await resolveBusinessByDodoSubscription(
+      ids.subscriptionId,
+      stubRetrieve(subscriptionRecord(null, "cus_not_ours", ids.subscriptionId)) as never
+    );
+    expect(unknownCustomer).toBeNull();
+
+    // Metadata that names an unknown business is not a proof either, and does
+    // not fall back to the (matching) customer — a contradictory record stays
+    // unresolved.
     const unknownBusiness = await resolveBusinessByDodoSubscription(
       ids.subscriptionId,
       stubRetrieve(subscriptionRecord("no-such-business", ids.customerId, ids.subscriptionId)) as never

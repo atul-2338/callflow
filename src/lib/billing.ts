@@ -2,6 +2,7 @@ import DodoPayments from "dodopayments";
 import {
   applyDodoWebhookEvent,
   createBusiness,
+  getBusinessByDodoCustomerId,
   getBusinessByDodoSubscriptionId,
   getBusinessById,
   getBusinessByName,
@@ -368,7 +369,9 @@ export interface DodoSubscriptionFetch {
  * answer comes from Dodo's own authenticated record (the same merchant
  * credentials that sign the webhooks). The subscription's checkout metadata
  * names one of our businesses, and the subscription's customer must be *that
- * business's* Dodo customer, otherwise nothing is returned.
+ * business's* Dodo customer, otherwise nothing is returned. When Dodo returns no
+ * usable metadata the customer id alone decides: it is looked up against the
+ * `dodoCustomerId` we stored before sending the browser to Dodo.
  *
  * Never throws: a missing API key, network error, unknown subscription, or any
  * disagreement returns `null` and the caller answers 401.
@@ -412,19 +415,38 @@ export async function resolveBusinessByDodoSubscription(
   const metadata = record.metadata as Record<string, unknown> | null | undefined;
   const hintedId = metadata?.[DODO_BUSINESS_ID_METADATA_KEY];
   const customerId = record.customer?.customer_id;
-  if (typeof hintedId !== "string" || !hintedId) return null;
   if (typeof customerId !== "string" || !customerId) return null;
 
-  const business = await getBusinessById(hintedId);
-  // The metadata hint is only a pointer — Dodo's customer record is the
-  // authority, exactly as the webhook write path treats it.
-  if (!business || business.dodoCustomerId !== customerId) return null;
+  // (1) The checkout metadata names the business the subscription was created
+  // for. It is only a pointer — Dodo's customer record is the authority, exactly
+  // as the webhook write path treats it — so a hint whose customer disagrees
+  // with the record resolves to nothing.
+  if (typeof hintedId === "string" && hintedId) {
+    const business = await getBusinessById(hintedId);
+    if (!business || business.dodoCustomerId !== customerId) return null;
 
-  console.info("[dodo-billing] subscription resolved to business", {
-    businessId: business.id,
+    console.info("[dodo-billing] subscription resolved to business", {
+      businessId: business.id,
+      subscriptionId,
+    });
+    return business;
+  }
+
+  // (2) No usable metadata (Dodo does not always echo checkout metadata onto the
+  // subscription). The customer id is still Dodo's own attribution of the
+  // subscription, and `dodoCustomerId` is written to the business row *before*
+  // the browser is sent to Dodo — so it names the account that started this
+  // checkout while trusting nothing the redirect itself carried. A stored
+  // customer that disagrees is simply not found: a contradictory customer id
+  // resolves to nothing.
+  const byCustomer = await getBusinessByDodoCustomerId(customerId);
+  if (!byCustomer || byCustomer.dodoCustomerId !== customerId) return null;
+
+  console.info("[dodo-billing] subscription resolved to business via customer id", {
+    businessId: byCustomer.id,
     subscriptionId,
   });
-  return business;
+  return byCustomer;
 }
 
 /**

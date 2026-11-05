@@ -143,11 +143,32 @@ export async function POST(request: Request) {
     const proofBusinessId =
       handoff?.businessId ?? returnTokenBusinessId ?? subscriptionBusiness?.id ?? null;
     if (!proofBusinessId) {
+      // Booleans only: enough to tell "the browser dropped our cookies" from
+      // "Dodo rewrote the return URL" from "the subscription is not ours".
+      // Never the tokens, cookie values, keys or secrets themselves.
+      console.warn("[billing-confirm] no verifiable checkout identity — returning 401", {
+        hasSessionCookie: !!cookieBusinessId,
+        hasHandoff: !!handoff,
+        trialIdPresent: !!body.trialId,
+        trialIdValid: !!returnTokenBusinessId,
+        subscriptionIdPresent: !!body.subscriptionId,
+        businessId: cookieBusinessId,
+        checkoutSessionId: body.checkoutSessionId,
+      });
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
 
     business = subscriptionBusiness ?? (await getBusinessById(proofBusinessId));
     if (!business) {
+      console.warn("[billing-confirm] identity proved but business row is missing — returning 404", {
+        hasSessionCookie: !!cookieBusinessId,
+        hasHandoff: !!handoff,
+        trialIdPresent: !!body.trialId,
+        trialIdValid: !!returnTokenBusinessId,
+        subscriptionIdPresent: !!body.subscriptionId,
+        businessId: proofBusinessId,
+        checkoutSessionId: body.checkoutSessionId,
+      });
       return NextResponse.json({ error: "Billing profile not found" }, { status: 404 });
     }
   }

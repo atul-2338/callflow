@@ -21,12 +21,15 @@ import type { BillingAccessState } from "@/lib/billing";
  * The webhook usually wins within a couple of seconds; if nothing has confirmed
  * by the timeout we say so honestly instead of pretending the trial started,
  * and offer a retry (which re-asks Dodo directly) plus a link back into
- * checkout.
+ * checkout. Until that deadline every answer — including the 401/404 that say
+ * "this browser proves nothing yet" — keeps the confirming card and the poll
+ * running, because the identity Dodo's redirect carries can show up a poll or
+ * two after the redirect itself.
  */
 
-const POLL_INTERVAL_MS = 2000;
+const POLL_INTERVAL_MS = 3000;
 const POLL_TIMEOUT_MS = 60_000;
-/** After this many polls (~16s) the pending card admits it is taking long. */
+/** After this many polls (~24s) the pending card admits it is taking long. */
 const SLOW_AFTER_POLLS = 8;
 /** Once confirmed, hand the owner to the final forwarding step automatically. */
 const REDIRECT_DELAY_MS = 2000;
@@ -79,23 +82,37 @@ export default function CheckoutReturn() {
     // "?" (`...?trial_id=<token>?status=success&session_id=...`): the token is
     // base64url plus a dot, so anything after a "?" is not part of it.
     const trialId = params.get("trial_id")?.split("?")[0] || null;
-    const response = await fetch("/api/billing/confirm", {
-      method: "POST",
-      cache: "no-store",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        checkoutSessionId: params.get("session_id"),
-        subscriptionId: params.get("subscription_id"),
-        trialId,
-      }),
-    });
 
     setAttemptedSessionId(params.get("session_id"));
     setAttempts((count) => count + 1);
     const declinedByRedirect = params.get("status") === "failed";
 
+    let response: Response;
+    try {
+      response = await fetch("/api/billing/confirm", {
+        method: "POST",
+        cache: "no-store",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          checkoutSessionId: params.get("session_id"),
+          subscriptionId: params.get("subscription_id"),
+          trialId,
+        }),
+      });
+    } catch {
+      // A dropped connection is not an answer: keep the confirming card and try
+      // again on the next tick.
+      setPhase(Date.now() < deadline ? "verifying" : "unconfirmed");
+      return;
+    }
+
+    // 401/404 do not end the wait. On the cross-site trip back from Dodo the
+    // browser may not have our cookies yet, Dodo may not have linked (or
+    // attributed) the subscription yet, and the redirect may carry nothing we
+    // can verify — any of which can become true a poll or two later. Only the
+    // deadline turns this into "we can't match this checkout".
     if (response.status === 401 || response.status === 404) {
-      setPhase("signed_out");
+      setPhase(Date.now() < deadline ? "verifying" : "signed_out");
       return;
     }
     if (!response.ok) {
@@ -154,6 +171,14 @@ export default function CheckoutReturn() {
     );
     return () => clearTimeout(timer);
   }, [phase, router]);
+
+  // A fresh 60-second window: shared by the two retryable end states so the
+  // next attempt either confirms or ends in the same place honestly.
+  const retry = () => {
+    setDeadline(Date.now() + POLL_TIMEOUT_MS);
+    setAttempts(0);
+    setPhase("verifying");
+  };
 
   const trialEndsAt = me?.trialEndsAt ?? null;
   const slow = attempts >= SLOW_AFTER_POLLS;
@@ -217,6 +242,9 @@ export default function CheckoutReturn() {
         tone="warning"
         title="We can't match this checkout to an account"
         body="Dodo sent you back, but this return link does not match a CallFlow account we can verify. It may belong to an earlier checkout attempt, or the payment was started for a different account. If you were charged, sign in with your email and your plan will sync from Dodo; otherwise start again below."
+        actionLabel="Check again"
+        actionIcon={<RefreshCw className="h-4 w-4" />}
+        onAction={retry}
       >
         <Link href="/onboarding" className="ios-pill-primary w-full px-4 py-3.5 text-[15px]">
           Back to signup
@@ -250,11 +278,7 @@ export default function CheckoutReturn() {
         }
         actionLabel="Check again"
         actionIcon={<RefreshCw className="h-4 w-4" />}
-        onAction={() => {
-          setDeadline(Date.now() + POLL_TIMEOUT_MS);
-          setAttempts(0);
-          setPhase("verifying");
-        }}
+        onAction={retry}
       >
         <Link
           href="/onboarding"

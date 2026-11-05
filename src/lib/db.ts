@@ -783,6 +783,25 @@ export async function getBusinessByDodoSubscriptionId(
   return row ? mapBusiness(row) : undefined;
 }
 
+/**
+ * Find the business a Dodo customer belongs to.
+ *
+ * `dodoCustomerId` is written *before* the browser is ever sent to Dodo (see
+ * `createBillingSignup`), so it identifies the account that started a checkout
+ * even when Dodo's subscription record carries no checkout metadata and the
+ * return URL no longer identifies anything. Backs the customer fallback in
+ * `resolveBusinessByDodoSubscription`; the unique index guarantees at most one
+ * row per customer.
+ */
+export async function getBusinessByDodoCustomerId(
+  customerId: string
+): Promise<Business | undefined> {
+  const row = getDb()
+    .prepare("SELECT * FROM businesses WHERE dodoCustomerId = ? LIMIT 1")
+    .get(customerId) as BusinessRow | undefined;
+  return row ? mapBusiness(row) : undefined;
+}
+
 export async function getBusinessByCheckoutSessionId(
   sessionId: string
 ): Promise<Business | undefined> {

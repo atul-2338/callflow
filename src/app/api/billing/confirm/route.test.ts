@@ -8,12 +8,35 @@ import {
   businessSessionCookieName,
   createBusinessSessionToken,
 } from "@/lib/business-session";
+import { DODO_BUSINESS_ID_METADATA_KEY } from "@/lib/billing";
 import {
   createCheckoutReturnToken,
   createSignupHandoffToken,
   signupHandoffCookieName,
 } from "@/lib/signup-handoff";
 import { POST } from "./route";
+
+// The route resolves Dodo's redirect `subscription_id` through getDodoClient();
+// swap the SDK for stubs so the suite exercises the route + database without
+// network access or credentials.
+const dodoMocks = vi.hoisted(() => ({
+  subscriptionRetrieve: vi.fn(),
+  subscriptionList: vi.fn(),
+}));
+
+vi.mock("@/lib/dodo", () => ({
+  DODO_TRIAL_DAYS: 3,
+  getDodoClient: () => ({
+    subscriptions: {
+      retrieve: dodoMocks.subscriptionRetrieve,
+      list: dodoMocks.subscriptionList,
+    },
+  }),
+  getDodoSoloProductId: () => "pdt_test_solo",
+  getDodoReturnUrl: () => "https://callflow.test/checkout/return",
+  getDodoCancelUrl: () => "https://callflow.test/onboarding",
+  getDodoPortalReturnUrl: () => "https://callflow.test/settings",
+}));
 
 const TEST_SECRET = "confirm-route-test-secret";
 // Throwaway database (business rows with unique phone numbers per test);
@@ -73,6 +96,8 @@ function subscribedBusiness(
 describe("POST /api/billing/confirm", () => {
   beforeEach(() => {
     vi.stubEnv("BUSINESS_SESSION_SECRET", TEST_SECRET);
+    dodoMocks.subscriptionRetrieve.mockReset();
+    dodoMocks.subscriptionList.mockReset();
   });
 
   afterAll(() => {
@@ -353,5 +378,186 @@ describe("POST /api/billing/confirm", () => {
     expect(expired.status).toBe(401);
     expect(await expired.json()).toEqual({ error: "Unauthorized" });
     expect(expired.headers.getSetCookie()).toEqual([]);
+  });
+
+  it("subscription_id only: resolved through the Dodo customer, not 401", async () => {
+    // The new-signup case the return page actually hits: no session cookie, no
+    // handoff cookie, and Dodo's redirect did not keep our trial_id — only
+    // `subscription_id`. Dodo's record carries no checkout metadata, so the
+    // `dodoCustomerId` stored before the redirect is the identity.
+    const business = await createBusiness(
+      seedBusiness({
+        phoneNumber: "+12125550021",
+        dodoCustomerId: "cus_fallback_active",
+        dodoCheckoutSessionId: "cs_fallback_active",
+        subscriptionStatus: "pending_checkout",
+        billingName: "Fallback Active Biz",
+      })
+    );
+    const startedAt = new Date().toISOString();
+    dodoMocks.subscriptionRetrieve.mockResolvedValue({
+      subscription_id: "sub_fallback_active",
+      status: "active",
+      created_at: startedAt,
+      customer: { customer_id: "cus_fallback_active" },
+    });
+    dodoMocks.subscriptionList.mockResolvedValue({
+      items: [
+        {
+          subscription_id: "sub_fallback_active",
+          status: "active",
+          created_at: startedAt,
+          customer: { customer_id: "cus_fallback_active" },
+        },
+      ],
+    });
+
+    const response = await POST(confirmRequest({ body: { subscriptionId: "sub_fallback_active" } }));
+
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as Record<string, unknown>;
+    expect(body.businessId).toBe(business.id);
+    expect(body.subscriptionStatus).toBe("active");
+    expect(body.hasSubscription).toBe(true);
+    expect(body.trialStartedAt).toBe(startedAt);
+    // Proven through Dodo itself, so the account gets its real session; the
+    // signed redirect on its own never grants anything.
+    expect(
+      response.headers.getSetCookie().some((c) => c.startsWith(`${businessSessionCookieName()}=`))
+    ).toBe(true);
+  });
+  it("empty metadata and no subscription yet: 200 pending state, not 401", async () => {
+    const business = await createBusiness(
+      seedBusiness({
+        phoneNumber: "+12125550022",
+        dodoCustomerId: "cus_fallback_pending",
+        dodoCheckoutSessionId: "cs_fallback_pending",
+        subscriptionStatus: "pending_checkout",
+        billingName: "Fallback Pending Biz",
+      })
+    );
+    // The metadata the webhook would have trusted is missing, and Dodo has not
+    // linked a subscription to this customer yet: the account is still
+    // identified, the state is simply unconfirmed.
+    dodoMocks.subscriptionRetrieve.mockResolvedValue({
+      subscription_id: "sub_fallback_pending",
+      status: "pending",
+      metadata: {},
+      customer: { customer_id: "cus_fallback_pending" },
+    });
+    dodoMocks.subscriptionList.mockResolvedValue({ items: [] });
+
+    const response = await POST(
+      confirmRequest({
+        body: {
+          subscriptionId: "sub_fallback_pending",
+          checkoutSessionId: "cs_fallback_pending",
+        },
+      })
+    );
+
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as Record<string, unknown>;
+    expect(body.businessId).toBe(business.id);
+    expect(body.subscriptionStatus).toBe("pending_checkout");
+    expect(body.hasSubscription).toBe(false);
+    expect(body.access).toEqual({ state: "awaiting_checkout", entitled: false });
+    // Nothing is proven yet → no session and no cookie changes.
+    expect(response.headers.getSetCookie()).toEqual([]);
+  });
+
+  it("contradictory customer id: exact 401 and a booleans-only log", async () => {
+    const business = await createBusiness(
+      seedBusiness({
+        phoneNumber: "+12125550023",
+        dodoCustomerId: "cus_fallback_ours",
+        dodoCheckoutSessionId: "cs_fallback_conflict",
+        subscriptionStatus: "pending_checkout",
+        billingName: "Conflict Biz",
+      })
+    );
+    // The subscription names our business in its metadata but Dodo attributes
+    // it to another customer — a contradiction must prove nothing.
+    dodoMocks.subscriptionRetrieve.mockResolvedValue({
+      subscription_id: "sub_fallback_conflict",
+      status: "active",
+      metadata: { [DODO_BUSINESS_ID_METADATA_KEY]: business.id },
+      customer: { customer_id: "cus_someone_else" },
+    });
+
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const response = await POST(
+      confirmRequest({
+        body: {
+          subscriptionId: "sub_fallback_conflict",
+          // Dodo's redirect session_id, which no row claims (otherwise the
+          // legacy session lookup would identify the business instead).
+          checkoutSessionId: "cs_redirect_conflict",
+        },
+      })
+    );
+    const logged = warn.mock.calls.find(([message]) =>
+      String(message).includes("no verifiable checkout identity")
+    );
+    warn.mockRestore();
+
+    expect(response.status).toBe(401);
+    expect(await response.json()).toEqual({ error: "Unauthorized" });
+    expect(response.headers.getSetCookie()).toEqual([]);
+    // A rejected proof never reaches the reconcile step.
+    expect(dodoMocks.subscriptionList).not.toHaveBeenCalled();
+
+    // Booleans and ids only — never the token, cookie value, key or secret.
+    expect(logged?.[1]).toEqual({
+      hasSessionCookie: false,
+      hasHandoff: false,
+      trialIdPresent: false,
+      trialIdValid: false,
+      subscriptionIdPresent: true,
+      businessId: null,
+      checkoutSessionId: "cs_redirect_conflict",
+    });
+  });
+
+  it("subscription still processing: linked, 200, and still not entitled", async () => {
+    const business = await createBusiness(
+      seedBusiness({
+        phoneNumber: "+12125550024",
+        dodoCustomerId: "cus_fallback_processing",
+        dodoCheckoutSessionId: "cs_fallback_processing",
+        subscriptionStatus: "pending_checkout",
+        billingName: "Processing Biz",
+      })
+    );
+    dodoMocks.subscriptionRetrieve.mockResolvedValue({
+      subscription_id: "sub_fallback_processing",
+      status: "pending",
+      metadata: {},
+      customer: { customer_id: "cus_fallback_processing" },
+    });
+    dodoMocks.subscriptionList.mockResolvedValue({
+      items: [
+        {
+          subscription_id: "sub_fallback_processing",
+          status: "pending",
+          created_at: new Date().toISOString(),
+          customer: { customer_id: "cus_fallback_processing" },
+        },
+      ],
+    });
+
+    const response = await POST(
+      confirmRequest({ body: { subscriptionId: "sub_fallback_processing" } })
+    );
+
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as Record<string, unknown>;
+    expect(body.businessId).toBe(business.id);
+    expect(body.subscriptionStatus).toBe("pending");
+    expect(body.hasSubscription).toBe(true);
+    // Reconciled through the webhook write path only: unconfirmed work is not
+    // access, so the trial clock has not started either.
+    expect(body.trialStartedAt).toBeNull();
+    expect((body.access as { entitled: boolean }).entitled).toBe(false);
   });
 });
