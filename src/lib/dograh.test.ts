@@ -100,6 +100,12 @@ describe("parseDograhWebhookBody — POST /api/webhooks/dograh contract", () => 
       customerName: "Priya Raman",
       callerNumber: "+15550000123",
       calledNumber: "+15550001111",
+      // Nothing captured and no disposition sent: the details stay null and
+      // the disposition falls back to the status string.
+      serviceRequested: null,
+      urgency: null,
+      preferredCallbackTime: null,
+      disposition: "completed",
     });
   });
 
@@ -170,6 +176,10 @@ describe("parseDograhWebhookBody — POST /api/webhooks/dograh contract", () => 
       customerName: null,
       callerNumber: "",
       calledNumber: "",
+      serviceRequested: null,
+      urgency: null,
+      preferredCallbackTime: null,
+      disposition: "answered",
     });
   });
 });
@@ -251,6 +261,87 @@ describe("parseDograhWebhookBody — called-number aliases", () => {
     expect(
       parseDograhWebhookBody({ callId: "a", to: "   ", unrelated: "+15550001111" })!.calledNumber
     ).toBe("");
+  });
+});
+
+describe("parseDograhWebhookBody — the agent's captured details", () => {
+  it("reads Dograh's own field names (problem / urgency / preferred_time)", () => {
+    const payload = parseDograhWebhookBody({
+      workflow_run_id: "768812",
+      called_number: "+17374021244",
+      caller_number: "+15550000123",
+      problem: "burst pipe under the kitchen sink",
+      urgency: "emergency",
+      preferred_time: "tomorrow before 9am",
+      call_disposition: "user_hangup",
+      call_status: "user_hangup",
+      call_duration_seconds: "157",
+    })!;
+
+    expect(payload).toMatchObject({
+      callId: "768812",
+      callerNumber: "+15550000123",
+      calledNumber: "+17374021244",
+      durationSeconds: 157,
+      serviceRequested: "burst pipe under the kitchen sink",
+      urgency: "emergency",
+      preferredCallbackTime: "tomorrow before 9am",
+      disposition: "user_hangup",
+    });
+  });
+
+  it("reads the same details out of a stringified gathered context", () => {
+    const payload = parseDograhWebhookBody({
+      callId: "a",
+      called_number: "+17374021244",
+      gathered: JSON.stringify({
+        context: {
+          problem: "no hot water",
+          urgency: "today",
+          preferred_time: "after 5pm",
+        },
+      }),
+    })!;
+
+    expect(payload.serviceRequested).toBe("no hot water");
+    expect(payload.urgency).toBe("today");
+    expect(payload.preferredCallbackTime).toBe("after 5pm");
+  });
+
+  it("uses callback_number when the delivery carries no caller id", () => {
+    const payload = parseDograhWebhookBody({
+      callId: "cb-1",
+      called_number: "+17374021244",
+      caller_number: "",
+      callback_number: "+15550000777",
+    })!;
+
+    expect(payload.callerNumber).toBe("+15550000777");
+  });
+
+  it("keeps null when the agent captured nothing (empty strings, not values)", () => {
+    // The exact shape the live webhook sends today: the keys exist, the values
+    // are empty. Nothing may be invented from that.
+    const payload = parseDograhWebhookBody({
+      called_number: "+17374021244",
+      caller_number: "",
+      customer_name: "",
+      callback_number: "",
+      problem: "",
+      urgency: "",
+      preferred_time: "",
+      call_disposition: "user_idle_max_duration_exceeded",
+      call_status: "user_idle_max_duration_exceeded",
+      workflow_run_id: "768812",
+    })!;
+
+    expect(payload.serviceRequested).toBeNull();
+    expect(payload.urgency).toBeNull();
+    expect(payload.preferredCallbackTime).toBeNull();
+    expect(payload.customerName).toBeNull();
+    expect(payload.callerNumber).toBe("");
+    // The disposition is always reported: it is what the outcome is derived from.
+    expect(payload.disposition).toBe("user_idle_max_duration_exceeded");
   });
 });
 

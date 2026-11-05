@@ -155,6 +155,15 @@ export interface DograhWebhookPayload {
    * then from the `to` / `to_number` / `called` aliases (top level,
    * initial_context, or a nested `call` object) — see parseDograhWebhookBody. */
   calledNumber: string;
+  /** What the caller needs — Dograh's `problem` field (also accepted as
+   * service_requested). null when the delivery carried nothing. */
+  serviceRequested: string | null;
+  /** Dograh's `urgency` field, verbatim. null when not captured. */
+  urgency: string | null;
+  /** Dograh's `preferred_time` field (when the caller wants a callback). */
+  preferredCallbackTime: string | null;
+  /** Raw end-of-call disposition: `call_disposition`, else `call_status`. */
+  disposition: string;
 }
 
 /**
@@ -187,6 +196,14 @@ export function parseDograhWebhookBody(body: unknown): DograhWebhookPayload | nu
       body.caller_name
     ) || null;
 
+  // The agent's captured details follow the same three scopes: the gathered
+  // context first (where the workflow keeps them), then `gathered`, then the
+  // top level. Dograh's own field names are the documented ones — `problem`,
+  // `urgency`, `preferred_time` — with the snake/camel aliases accepted so a
+  // template rename cannot silently drop them again.
+  const detailField = (...keys: string[]) =>
+    firstString(...keys.flatMap((key) => [context[key], gathered[key], body[key]])) || null;
+
   const initial = asContext(body.initial_context ?? body.initialContext);
   // A nested `call` object (Vapi/Telnyx-shaped templates) — native or
   // JSON-rendered by the template — is also accepted for the dialled number.
@@ -194,9 +211,20 @@ export function parseDograhWebhookBody(body: unknown): DograhWebhookPayload | nu
   return {
     callId,
     status: firstString(body.status, body.call_status),
-    durationSeconds: firstFiniteNumber(body.duration, body.duration_seconds),
+    durationSeconds: firstFiniteNumber(
+      body.duration,
+      body.duration_seconds,
+      body.call_duration_seconds
+    ),
     customerName,
-    callerNumber: firstString(body.caller_number, initial.caller_number),
+    // `callback_number` is the last resort: when the trunk gives no caller id
+    // but the agent captured a number to call back, that is still the caller.
+    callerNumber: firstString(
+      body.caller_number,
+      initial.caller_number,
+      body.callback_number,
+      initial.callback_number
+    ),
     // Precedence: the TWO documented paths first, in their historic order, so
     // every payload that resolves today resolves to the exact same number.
     // Only then the common telephony aliases, innermost scope last. Reading
@@ -216,5 +244,13 @@ export function parseDograhWebhookBody(body: unknown): DograhWebhookPayload | nu
       call.to_number,
       call.called
     ),
+    serviceRequested: detailField("problem", "service_requested", "serviceRequested"),
+    urgency: detailField("urgency"),
+    preferredCallbackTime: detailField(
+      "preferred_time",
+      "preferred_callback_time",
+      "preferredCallbackTime"
+    ),
+    disposition: firstString(body.call_disposition, body.call_status, body.status),
   };
 }

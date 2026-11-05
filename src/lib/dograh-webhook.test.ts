@@ -172,9 +172,10 @@ describe("happy path + persistence", () => {
       callStatus: "answered", // unknown status "completed" → answered
       durationSeconds: 184,
       customerName: "Priya Raman",
-      // calls.outcome stays null in the DB; the row mapper in db.ts
-      // normalizes a null/unknown outcome to "other" for the dashboard.
-      outcome: "other",
+      // The outcome is derived from the disposition/status now: a delivery that
+      // reached the agent (status "completed", no disposition) counts as
+      // "handled" instead of the old blanket NULL → "other".
+      outcome: "handled",
       dograhDeliveryId: null,
     });
     expect(JSON.parse(call!.rawPayload!)).toMatchObject({
@@ -188,6 +189,73 @@ describe("happy path + persistence", () => {
     await fire({ callId: "status-vm", status: "voicemail_left" });
     const { getCallByDograhRunId } = await import("./db");
     expect((await getCallByDograhRunId("status-vm"))!.callStatus).toBe("voicemail_left");
+  });
+
+  it("stores the details the agent captured (problem / urgency / preferred_time)", async () => {
+    const res = await fire({
+      callId: "details-1",
+      caller_number: "+15550000123",
+      called_number: "+15550001111",
+      problem: "burst pipe under the kitchen sink",
+      urgency: "emergency",
+      preferred_time: "tomorrow before 9am",
+      call_disposition: "user_hangup",
+      call_status: "user_hangup",
+      // The live payload carries call_duration_seconds and no `duration`; clear
+      // the helper's default so the real field is the one under test.
+      duration: undefined,
+      call_duration_seconds: "157",
+    });
+    expect(res.status).toBe(200);
+
+    const { getCallByDograhRunId } = await import("./db");
+    const call = await getCallByDograhRunId("details-1");
+    expect(call).toMatchObject({
+      callerNumber: "+15550000123",
+      durationSeconds: 157,
+      serviceRequested: "burst pipe under the kitchen sink",
+      urgency: "emergency",
+      preferredCallbackTime: "tomorrow before 9am",
+      // Stored raw so a new/renamed disposition stays diagnosable…
+      dograhDisposition: "user_hangup",
+      // …and mapped to a real outcome instead of the old "Other".
+      outcome: "handled",
+    });
+  });
+
+  it("a replay carrying empty values keeps what was already captured", async () => {
+    // Redeliveries can arrive with the agent's fields blank; they must never
+    // wipe details an earlier delivery stored.
+    await fire({
+      callId: "details-replay",
+      problem: "no hot water",
+      urgency: "today",
+      preferred_time: "after 5pm",
+      call_disposition: "user_hangup",
+    });
+    await fire({
+      callId: "details-replay",
+      problem: "",
+      urgency: "",
+      preferred_time: "",
+    });
+
+    const { getCallByDograhRunId } = await import("./db");
+    const call = await getCallByDograhRunId("details-replay");
+    expect(call).toMatchObject({
+      serviceRequested: "no hot water",
+      urgency: "today",
+      preferredCallbackTime: "after 5pm",
+      outcome: "handled",
+    });
+  });
+
+  it("maps a voicemail disposition to the voicemail outcome", async () => {
+    await fire({ callId: "details-vm", call_disposition: "voicemail_left" });
+    const { getCallByDograhRunId } = await import("./db");
+    const call = await getCallByDograhRunId("details-vm");
+    expect(call!.outcome).toBe("voicemail");
+    expect(call!.dograhDisposition).toBe("voicemail_left");
   });
 
   it("upserts: the same callId twice updates the one row", async () => {

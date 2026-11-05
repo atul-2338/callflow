@@ -413,6 +413,14 @@ export interface UpsertDograhCallInput {
   durationSeconds: number | null;
   customerName: string | null;
   callbackNumber: string | null;
+  /** Normalized outcome derived from Dograh's disposition (never invented). */
+  outcome: CallOutcome | null;
+  /** Dograh's raw disposition, kept so a renamed value stays diagnosable. */
+  dograhDisposition: string | null;
+  /** What the caller needed, as captured by the agent. */
+  serviceRequested: string | null;
+  urgency: string | null;
+  preferredCallbackTime: string | null;
   rawPayload: string;
 }
 
@@ -421,6 +429,11 @@ export interface UpsertDograhCallInput {
  * partial unique index idx_calls_dograh_run guards — so a redelivered callId
  * UPDATEs the existing row and a duplicate row can never be inserted, even by
  * concurrent deliveries (a lost UNIQUE race is retried as an update).
+ *
+ * The captured-detail columns use COALESCE(@incoming, column): a redelivery
+ * that carries an empty value keeps what an earlier delivery already captured,
+ * so a replay can never blank out the caller's problem, urgency or callback
+ * preference.
  */
 export async function upsertDograhCall(
   input: UpsertDograhCallInput
@@ -434,6 +447,11 @@ export async function upsertDograhCall(
        businessNumber = @businessNumber, callStatus = @callStatus,
        durationSeconds = @durationSeconds, customerName = @customerName,
        callbackNumber = @callbackNumber, rawPayload = @rawPayload,
+       outcome = COALESCE(@outcome, outcome),
+       dograhDisposition = COALESCE(@dograhDisposition, dograhDisposition),
+       serviceRequested = COALESCE(@serviceRequested, serviceRequested),
+       urgency = COALESCE(@urgency, urgency),
+       preferredCallbackTime = COALESCE(@preferredCallbackTime, preferredCallbackTime),
        updatedAt = @updatedAt
      WHERE id = @id`
   );
@@ -447,6 +465,11 @@ export async function upsertDograhCall(
       durationSeconds: input.durationSeconds,
       customerName: input.customerName,
       callbackNumber: input.callbackNumber,
+      outcome: input.outcome,
+      dograhDisposition: input.dograhDisposition,
+      serviceRequested: input.serviceRequested,
+      urgency: input.urgency,
+      preferredCallbackTime: input.preferredCallbackTime,
       rawPayload: input.rawPayload,
       updatedAt: now,
     });
@@ -462,12 +485,14 @@ export async function upsertDograhCall(
       `INSERT INTO calls (
          id, businessId, callerNumber, businessNumber, callStatus,
          callStartedAt, callEndedAt, durationSeconds, textBackSent,
-         dograhRunId, outcome, customerName, callbackNumber, rawPayload,
+         dograhRunId, dograhDisposition, outcome, customerName, callbackNumber,
+         rawPayload, serviceRequested, urgency, preferredCallbackTime,
          followUpStatus, followUpNotes, createdAt, updatedAt
        ) VALUES (
          @id, @businessId, @callerNumber, @businessNumber, @callStatus,
          @callStartedAt, @callEndedAt, @durationSeconds, 0,
-         @callId, NULL, @customerName, @callbackNumber, @rawPayload,
+         @callId, @dograhDisposition, @outcome, @customerName, @callbackNumber,
+         @rawPayload, @serviceRequested, @urgency, @preferredCallbackTime,
          'none', '', @createdAt, @createdAt
        )`
     ).run({
@@ -480,9 +505,14 @@ export async function upsertDograhCall(
       callStartedAt: now,
       callEndedAt: now,
       durationSeconds: input.durationSeconds,
+      dograhDisposition: input.dograhDisposition,
+      outcome: input.outcome,
       customerName: input.customerName,
       callbackNumber: input.callbackNumber,
       rawPayload: input.rawPayload,
+      serviceRequested: input.serviceRequested,
+      urgency: input.urgency,
+      preferredCallbackTime: input.preferredCallbackTime,
       createdAt: now,
     });
     return { id, created: true };

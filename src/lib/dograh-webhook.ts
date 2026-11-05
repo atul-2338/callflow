@@ -22,7 +22,7 @@ import {
 } from "./email";
 import { sendPushNotification, type NotifyMissedCallResult } from "./firebase";
 import { normalizeEnvValue } from "./util";
-import { CALL_STATUSES, type CallStatus } from "./types";
+import { CALL_STATUSES, type CallOutcome, type CallStatus } from "./types";
 
 /**
  * Core of the Dograh end-of-call webhook (POST /api/webhooks/dograh):
@@ -146,6 +146,34 @@ function toCallStatus(status: string): CallStatus {
     : "answered";
 }
 
+/**
+ * Dograh's raw disposition → the dashboard's outcome enum.
+ *
+ * Dograh reports the end of a call as a disposition (e.g. `user_hangup`,
+ * `user_idle_max_duration_exceeded`, `voicemail_left`), which is not one of our
+ * five outcomes. Leaving `calls.outcome` NULL made every call show "Other", so
+ * the disposition is mapped here — and stored raw in `dograhDisposition`, so a
+ * renamed or new disposition stays diagnosable from the database.
+ *
+ * The mapping is deliberately conservative: only a voicemail disposition claims
+ * "voicemail", only a failure-ish one falls back to "other", and any delivery
+ * that reached the agent (hangup, idle timeout, completed) counts as "handled".
+ * Booking/callback outcomes need evidence we do not have in the webhook, so they
+ * are never invented.
+ */
+export function toCallOutcome(status: string, disposition: string): CallOutcome {
+  const raw = `${disposition} ${status}`.trim().toLowerCase();
+  if (!raw) return "other";
+  if (raw.includes("voicemail")) return "voicemail";
+  if (/(no[_-]?answer|failed|failure|declined|busy|rejected|error|not[_-]?connected)/.test(raw)) {
+    return "other";
+  }
+  if (/(hang|complete|answered|answered_by|idle|success|timeout|finish)/.test(raw)) {
+    return "handled";
+  }
+  return "other";
+}
+
 export async function handleDograhWebhook(opts: {
   body: unknown;
   headers: HeaderReader;
@@ -237,13 +265,22 @@ export async function handleDograhWebhook(opts: {
   // Owner pushes target one device token; an unmatched call has no business to
   // notify, so skip the lookup entirely.
   const fcmOwner = business ? await getBusinessFcmToken() : "";
+  const callStatus = toCallStatus(payload.status);
   const { id, created } = await upsertDograhCall({
     callId: payload.callId,
     businessId: business?.id ?? null,
     callerNumber: payload.callerNumber || "unknown",
     businessNumber: payload.calledNumber,
-    callStatus: toCallStatus(payload.status),
+    callStatus,
     durationSeconds: payload.durationSeconds,
+    // The agent's captured details. Each column keeps whatever is already
+    // stored when a redelivery carries no value (see upsertDograhCall), so a
+    // replayed webhook can never erase what an earlier delivery captured.
+    outcome: toCallOutcome(payload.status, payload.disposition),
+    dograhDisposition: payload.disposition || null,
+    serviceRequested: payload.serviceRequested,
+    urgency: payload.urgency,
+    preferredCallbackTime: payload.preferredCallbackTime,
     customerName: payload.customerName,
     callbackNumber: payload.callerNumber || null,
     rawPayload: JSON.stringify(opts.body ?? null),
@@ -289,8 +326,10 @@ export async function handleDograhWebhook(opts: {
         to,
         input: {
           name: payload.customerName || payload.callerNumber || "Unknown caller",
-          urgency: null,
-          reason: null,
+          // The agent's own words, not a guess: the email shows "not captured"
+          // when the delivery carried nothing.
+          urgency: payload.urgency,
+          reason: payload.serviceRequested,
           callbackNumber: payload.callerNumber || null,
           startedAt: new Date().toISOString(),
           recordingUrl: null,
