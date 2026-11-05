@@ -238,4 +238,74 @@ describe("POST /api/billing/signup", () => {
     );
     expect(response.headers.getSetCookie()).toEqual([]);
   });
+
+  it("Dodo rejecting the checkout session: 502, no URL, no cookies, status + code logged", async () => {
+    // The exact shape that used to leave the browser nowhere to go: no session
+    // was created, so there is no payment page. The visitor must stay on the
+    // signup form with a visible error — never be sent to /checkout/return.
+    dodoMocks.checkoutCreate.mockImplementation(() => {
+      throw Object.assign(new Error("product not found for this account"), {
+        status: 404,
+        error: { code: "PRODUCT_NOT_FOUND", message: "product missing" },
+      });
+    });
+
+    const errorLog = vi.spyOn(console, "error").mockImplementation(() => {});
+    const response = await POST(
+      signupRequest({ phoneNumber: "+12125550021", name: "Broken Checkout Biz" })
+    );
+    const logged = errorLog.mock.calls.find(([message]) =>
+      String(message).includes("checkout setup failed")
+    );
+    errorLog.mockRestore();
+
+    expect(response.status).toBe(502);
+    const body = (await response.json()) as Record<string, unknown>;
+    expect(body.error).toBe("Payment setup failed, please try again.");
+    // No redirect target of any kind — the client must stay on the page.
+    expect(body.checkoutUrl ?? null).toBeNull();
+    expect(body.alreadySubscribed).not.toBe(true);
+    // Nothing to identify the browser with, because there is no checkout.
+    expect(response.headers.getSetCookie()).toEqual([]);
+
+    // Only the HTTP status and the error code are logged — never the message,
+    // the request, the headers or the key.
+    expect(logged?.[1]).toEqual({
+      businessId: expect.any(String),
+      status: 404,
+      code: "PRODUCT_NOT_FOUND",
+    });
+  });
+
+  it("Dodo returning no usable checkout_url: 502 and no stored checkout session", async () => {
+    // One phone per bad value: businesses.phoneNumber is unique.
+    const cases: Array<{ phone: string; name: string; value: unknown }> = [
+      { phone: "+12125550031", name: "No Url Biz", value: undefined },
+      { phone: "+12125550032", name: "Empty Url Biz", value: "" },
+      { phone: "+12125550033", name: "Relative Url Biz", value: "/pay/cs_relative" },
+      { phone: "+12125550034", name: "Insecure Url Biz", value: "http://checkout.dodo.test/pay" },
+      // Our own return page — the misconfiguration that would bounce the payer
+      // straight onto /checkout/return with no payment form.
+      { phone: "+12125550035", name: "Own Page Url Biz", value: "https://callflow.test/checkout/return" },
+    ];
+
+    for (const bad of cases) {
+      dodoMocks.checkoutCreate.mockImplementation(() => ({
+        session_id: "cs_unusable",
+        checkout_url: bad.value,
+      }));
+
+      const errorLog = vi.spyOn(console, "error").mockImplementation(() => {});
+      const response = await POST(signupRequest({ phoneNumber: bad.phone, name: bad.name }));
+      errorLog.mockRestore();
+
+      expect(response.status).toBe(502);
+      const body = (await response.json()) as Record<string, unknown>;
+      expect(body.error).toBe("Payment setup failed, please try again.");
+      expect(body.checkoutUrl ?? null).toBeNull();
+      // No session/handoff cookie: nothing may identify a checkout that was
+      // never opened.
+      expect(response.headers.getSetCookie()).toEqual([]);
+    }
+  });
 });

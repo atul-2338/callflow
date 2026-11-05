@@ -31,6 +31,142 @@ const TRIAL_MS = DODO_TRIAL_DAYS * 24 * 60 * 60 * 1000;
  */
 export const DODO_BUSINESS_ID_METADATA_KEY = "callflow_business_id";
 
+/**
+ * One neutral sentence for a checkout that could not be opened. The payer gets
+ * a clear, retry-able message; the operator gets the Dodo HTTP status and error
+ * code in the server log. Never Dodo's raw error text (it can echo request
+ * details) and never a key.
+ */
+export const CHECKOUT_SETUP_FAILED = "Payment setup failed, please try again.";
+
+/**
+ * The only redirect target the signup page may ever use: Dodo's own hosted
+ * checkout, as an absolute https URL.
+ *
+ * Everything else is rejected — a missing/empty value, a relative path, plain
+ * http, anything unparsable, and any URL on our OWN host. That last case is the
+ * one that matters most: if `DODO_PAYMENTS_RETURN_URL` is ever handed back as
+ * the "checkout" link, the payer would be dropped straight onto
+ * `/checkout/return` — the "Confirming your payment" page — without a payment
+ * form ever being shown. Rejecting it here keeps the payer on the signup page
+ * with a visible error instead.
+ *
+ * Pure (no SDK, no database) so the rule is unit-testable.
+ */
+export function trustedCheckoutUrl(value: unknown, ownSite: string): string | null {
+  const raw = typeof value === "string" ? value.trim() : "";
+  if (!raw) return null;
+
+  let url: URL;
+  try {
+    url = new URL(raw);
+  } catch {
+    return null;
+  }
+  if (url.protocol !== "https:") return null;
+
+  try {
+    if (url.host === new URL(ownSite).host) return null;
+  } catch {
+    // An unparsable `ownSite` cannot be compared, so the https check above is
+    // the only guard — still better than refusing every real Dodo link.
+  }
+
+  return url.toString();
+}
+
+/**
+ * The only parts of a Dodo SDK failure worth logging: the HTTP status and the
+ * error code. Deliberately strips the error object, its request, its headers
+ * and any response body, so a log line can never carry a key or a token.
+ */
+export function dodoErrorDetails(error: unknown): { status: number | null; code: string | null } {
+  const record =
+    typeof error === "object" && error !== null ? (error as Record<string, unknown>) : {};
+  const nested =
+    typeof record.error === "object" && record.error !== null
+      ? (record.error as Record<string, unknown>)
+      : {};
+
+  const rawStatus = record.status ?? record.statusCode;
+  const status =
+    typeof rawStatus === "number" && Number.isFinite(rawStatus) ? rawStatus : null;
+
+  const rawCode = record.code ?? nested.code;
+  const code = typeof rawCode === "string" && rawCode ? rawCode : null;
+
+  return { status, code };
+}
+
+/**
+ * Create (or reuse) this business's Dodo customer and open a hosted checkout
+ * session, returning ids plus a VERIFIED checkout URL.
+ *
+ * Every failure mode throws the same neutral message: Dodo rejecting the call,
+ * a missing `checkout_url`, or a URL that is not an absolute https link on
+ * Dodo's own host (see `trustedCheckoutUrl`). Each one logs the Dodo HTTP status
+ * and error code first. The caller must never redirect on a failure — the payer
+ * sees Dodo's payment form or an error, never `/checkout/return`.
+ */
+async function openHostedCheckout(input: {
+  business: Business;
+  country: string;
+  email: string;
+  name: string;
+  phoneNumber: string;
+  returnUrl: string;
+}): Promise<{ customerId: string; sessionId: string; checkoutUrl: string }> {
+  let customerId: string;
+  let session: { session_id?: string | null; checkout_url?: string | null };
+  try {
+    const client = getDodoClient();
+
+    customerId =
+      input.business.dodoCustomerId ??
+      (
+        await client.customers.create({
+          email: input.email,
+          name: input.name,
+          phone_number: input.phoneNumber,
+          metadata: { [DODO_BUSINESS_ID_METADATA_KEY]: input.business.id },
+        })
+      ).customer_id;
+
+    session = await client.checkoutSessions.create(
+      buildSoloCheckoutSessionRequest({
+        businessId: input.business.id,
+        customerId,
+        country: input.country,
+        productId: getDodoSoloProductId(),
+        returnUrl: input.returnUrl,
+        cancelUrl: getDodoCancelUrl(),
+      })
+    );
+  } catch (error) {
+    const { status, code } = dodoErrorDetails(error);
+    console.error("[dodo-billing] checkout setup failed", {
+      businessId: input.business.id,
+      status,
+      code,
+    });
+    throw new Error(CHECKOUT_SETUP_FAILED);
+  }
+
+  const sessionId = typeof session.session_id === "string" ? session.session_id : "";
+  const checkoutUrl = trustedCheckoutUrl(session.checkout_url, input.returnUrl);
+  if (!sessionId || !checkoutUrl) {
+    console.error("[dodo-billing] checkout session has no usable checkout_url", {
+      businessId: input.business.id,
+      sessionId: sessionId || null,
+      checkoutUrlPresent:
+        typeof session.checkout_url === "string" && !!session.checkout_url.trim(),
+    });
+    throw new Error(CHECKOUT_SETUP_FAILED);
+  }
+
+  return { customerId, sessionId, checkoutUrl };
+}
+
 type CheckoutSessionCreateParams =
   Parameters<DodoPayments["checkoutSessions"]["create"]>[0];
 
@@ -248,54 +384,43 @@ export async function createBillingSignup(
       })) ?? business;
   }
 
-  const client = getDodoClient();
-
-  const customerId = business.dodoCustomerId ?? (
-    await client.customers.create({
-      email,
-      name,
-      phone_number: phoneNumber,
-      metadata: { [DODO_BUSINESS_ID_METADATA_KEY]: business.id },
-    })
-  ).customer_id;
-
   // Checkout URLs are single-use, so every attempt mints a fresh session and
   // overwrites the stored id; the abandoned one simply expires on Dodo's side.
   // The return URL carries a signed `trial_id` for THIS business: the handoff
   // cookie can be dropped by the browser on the cross-site trip back from Dodo,
   // the URL cannot. See withCheckoutReturnParam / /api/billing/confirm.
-  const session = await client.checkoutSessions.create(
-    buildSoloCheckoutSessionRequest({
-      businessId: business.id,
-      customerId,
-      country,
-      productId: getDodoSoloProductId(),
-      returnUrl: withCheckoutReturnParam(getDodoReturnUrl(), business.id),
-      cancelUrl: getDodoCancelUrl(),
-    })
-  );
+  //
+  // A session only counts when Dodo hands back a usable absolute https
+  // `checkout_url`; `openHostedCheckout` throws otherwise (after logging Dodo's
+  // status + error code), so a broken setup can never redirect the payer
+  // anywhere — least of all to our own /checkout/return page.
+  const returnUrl = withCheckoutReturnParam(getDodoReturnUrl(), business.id);
+  const { customerId, sessionId, checkoutUrl } = await openHostedCheckout({
+    business,
+    country,
+    email,
+    name,
+    phoneNumber,
+    returnUrl,
+  });
 
   business =
     (await updateBusiness(business.id, {
       dodoCustomerId: customerId,
-      dodoCheckoutSessionId: session.session_id,
+      dodoCheckoutSessionId: sessionId,
       subscriptionStatus: "pending_checkout",
     })) ?? business;
 
   console.info("[dodo-billing] created hosted checkout session", {
     businessId: business.id,
     customerId,
-    sessionId: session.session_id,
+    sessionId,
   });
-
-  if (!session.checkout_url) {
-    throw new Error("Dodo did not return a checkout URL. Your trial has not started yet.");
-  }
 
   return {
     business,
-    checkoutUrl: session.checkout_url,
-    checkoutSessionId: session.session_id,
+    checkoutUrl,
+    checkoutSessionId: sessionId,
     alreadySubscribed: false,
     created,
   };

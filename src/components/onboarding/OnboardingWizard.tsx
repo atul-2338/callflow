@@ -282,6 +282,30 @@ function StepOne({
   );
 }
 
+/**
+ * Shown when a checkout could not be opened at all. The wizard stays on this
+ * page with this message — it must never send the browser to /checkout/return,
+ * which can only report "we can't match this checkout" for a visit that never
+ * reached Dodo's payment form.
+ */
+const CHECKOUT_FAILED = "Payment setup failed, please try again.";
+
+/**
+ * Dodo's hosted checkout is the ONLY place this form may ever navigate to, so
+ * the value is re-checked here too: absolute, https, off-site. A missing URL, a
+ * relative path, plain http or one of our own pages all return null and the
+ * owner sees an error instead of being silently redirected.
+ */
+function absoluteHttpsUrl(value: string | null | undefined): string | null {
+  if (!value) return null;
+  try {
+    const url = new URL(value);
+    return url.protocol === "https:" ? url.toString() : null;
+  } catch {
+    return null;
+  }
+}
+
 const PLAN_FEATURES = [
   "24/7 AI answering & message taking",
   "Appointment booking for your business",
@@ -302,12 +326,18 @@ function StepTwo({
   const [country, setCountry] = useState("US");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState("");
+  // Set when the number already carries a verified subscription: there is
+  // nothing to pay, so we point the owner at sign-in instead of a payment page.
+  const [notice, setNotice] = useState("");
 
   async function startCheckout() {
     setError("");
+    setNotice("");
     setSubmitting(true);
+
+    let response: Response;
     try {
-      const response = await fetch("/api/billing/signup", {
+      response = await fetch("/api/billing/signup", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -317,43 +347,62 @@ function StepTwo({
           country,
         }),
       });
-      const data = (await response.json()) as {
-        checkoutUrl?: string | null;
-        alreadySubscribed?: boolean;
-        businessId?: string | null;
-        error?: string;
-        code?: string;
-      };
-      if (!response.ok) {
-        // A different business claimed the name between the Step-1
-        // pre-check and this checkout — route the message back to the
-        // name field instead of the step-level error.
-        if (data.code === "business_name_taken") {
-          onNameTaken(
-            data.error ||
-              "This business name is already taken. Please choose another."
-          );
-          setSubmitting(false);
-          return;
-        }
-        throw new Error(data.error || "Unable to start your trial.");
-      }
-
-      if (data.checkoutUrl) {
-        window.location.assign(data.checkoutUrl);
-        return;
-      }
-      // No URL means a verified Dodo webhook already linked a subscription to
-      // this business: go to the page that reports the server-side state.
-      if (data.alreadySubscribed) {
-        window.location.assign("/checkout/return");
-        return;
-      }
-      throw new Error("Dodo did not return a checkout URL. Your trial has not started yet.");
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Unable to start your trial.");
+    } catch {
+      // Never reached the server: no checkout exists, so no redirect either.
+      setError(CHECKOUT_FAILED);
       setSubmitting(false);
+      return;
     }
+
+    let data: {
+      checkoutUrl?: string | null;
+      alreadySubscribed?: boolean;
+      businessId?: string | null;
+      error?: string;
+      code?: string;
+    } = {};
+    try {
+      data = (await response.json()) as typeof data;
+    } catch {
+      data = {};
+    }
+
+    if (!response.ok) {
+      // A different business claimed the name between the Step-1 pre-check and
+      // this checkout — route the message back to the name field.
+      if (data.code === "business_name_taken") {
+        onNameTaken(
+          data.error || "This business name is already taken. Please choose another."
+        );
+        setSubmitting(false);
+        return;
+      }
+      // 400 is something the owner can fix (phone / name / country); anything
+      // else (Dodo 5xx, rate limit, misconfiguration) is a checkout failure.
+      setError(response.status === 400 && data.error ? data.error : CHECKOUT_FAILED);
+      setSubmitting(false);
+      return;
+    }
+
+    // Leave this page ONLY for Dodo's own hosted checkout. If the server could
+    // not open one, redirecting to /checkout/return would drop the visitor on
+    // the "Confirming your payment" page having never seen a payment form.
+    const checkoutUrl = absoluteHttpsUrl(data.checkoutUrl);
+    if (checkoutUrl) {
+      window.location.assign(checkoutUrl);
+      return;
+    }
+
+    if (data.alreadySubscribed) {
+      setNotice(
+        "This number already has a CallFlow subscription, so there is nothing to pay here."
+      );
+      setSubmitting(false);
+      return;
+    }
+
+    setError(CHECKOUT_FAILED);
+    setSubmitting(false);
   }
 
   return (
@@ -417,6 +466,16 @@ function StepTwo({
         Checkout is powered by Dodo Payments: $0 today, then $49/month after
         your 3-day trial. Cancel anytime.
       </p>
+
+      {notice ? (
+        <p className="mt-4 rounded-2xl border border-separator bg-black/[0.02] p-4 text-sm leading-relaxed text-ink-2">
+          {notice}{" "}
+          <Link href="/login" className="font-medium text-gold-strong hover:underline">
+            Sign in to manage your plan
+          </Link>
+          .
+        </p>
+      ) : null}
 
       <div className="mt-5 text-center text-sm">
         <Link href="/" className="font-medium text-gold-strong hover:underline">

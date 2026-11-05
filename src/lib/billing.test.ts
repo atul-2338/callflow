@@ -3,8 +3,10 @@ import {
   DODO_BUSINESS_ID_METADATA_KEY,
   buildSoloCheckoutSessionRequest,
   describeBillingAccess,
+  dodoErrorDetails,
   isTrialExpired,
   trialEndsAt,
+  trustedCheckoutUrl,
 } from "./billing";
 import { DODO_TRIAL_DAYS } from "./dodo";
 
@@ -51,6 +53,59 @@ describe("buildSoloCheckoutSessionRequest", () => {
     expect(() => buildSoloCheckoutSessionRequest({ ...baseRequest, country: "USA" })).toThrow(
       /two-letter ISO country code/
     );
+  });
+});
+
+describe("trustedCheckoutUrl", () => {
+  const OWN_SITE = "https://callflow.biz/checkout/return?trial_id=abc";
+
+  it("accepts Dodo's absolute https checkout link, query and all", () => {
+    const link = "https://checkout.dodopayments.com/session/cs_123?x=1";
+    expect(trustedCheckoutUrl(link, OWN_SITE)).toBe(link);
+  });
+
+  it("rejects anything that is not an absolute https URL", () => {
+    for (const value of [
+      "",
+      "   ",
+      "/pay/cs_1",
+      "checkout.dodopayments.com/pay/cs_1",
+      "http://checkout.dodopayments.com/pay/cs_1",
+      "javascript:alert(1)",
+      null,
+      undefined,
+      42,
+      { href: "https://checkout.dodopayments.com/pay/cs_1" },
+    ]) {
+      expect(trustedCheckoutUrl(value, "https://callflow.biz/checkout/return")).toBeNull();
+    }
+  });
+
+  it("rejects our own return page, so a mis-set return URL can never be the target", () => {
+    // The exact failure this guards: Dodo (or a wrong env value) handing back
+    // DODO_PAYMENTS_RETURN_URL as the "checkout" link would drop the payer on
+    // /checkout/return with no payment form.
+    expect(trustedCheckoutUrl("https://callflow.biz/checkout/return", OWN_SITE)).toBeNull();
+    expect(
+      trustedCheckoutUrl("https://callflow.biz/checkout/return?status=success", OWN_SITE)
+    ).toBeNull();
+  });
+});
+
+describe("dodoErrorDetails", () => {
+  it("keeps only the HTTP status and the error code", () => {
+    const error = Object.assign(new Error("nope"), {
+      status: 401,
+      error: { code: "UNAUTHORIZED", message: "bad key" },
+      request: { headers: { authorization: "Bearer secret-value" } },
+    });
+    expect(dodoErrorDetails(error)).toEqual({ status: 401, code: "UNAUTHORIZED" });
+  });
+
+  it("returns nulls for anything it cannot read", () => {
+    expect(dodoErrorDetails(new Error("offline"))).toEqual({ status: null, code: null });
+    expect(dodoErrorDetails(null)).toEqual({ status: null, code: null });
+    expect(dodoErrorDetails("boom")).toEqual({ status: null, code: null });
   });
 });
 
