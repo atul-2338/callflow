@@ -254,7 +254,6 @@ export type BillingSignupInput = {
 };
 
 const ALLOWED_SIGNUP_INDUSTRIES = ["Plumbing", "HVAC"] as const;
-const ALLOWED_SIGNUP_CARRIERS = ["Verizon", "T-Mobile", "AT&T", "UScellular", "Other / MVNO"] as const;
 
 function isCountryCode(value: string): boolean {
   return /^[A-Z]{2}$/.test(value);
