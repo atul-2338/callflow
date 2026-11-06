@@ -68,6 +68,9 @@ function signupRequest(overrides: Record<string, unknown> = {}): Request {
       name: "Reeves Plumbing",
       email: "owner@reeves.test",
       country: "US",
+      ownerName: "Test Owner",
+      industry: "Plumbing",
+      carrier: "Verizon",
       ...overrides,
     }),
   });
@@ -117,6 +120,9 @@ describe("POST /api/billing/signup", () => {
         phoneNumber: "+12125550001",
         name: "Fresh Biz",
         email: "fresh@reeves.test",
+        ownerName: "Fresh Owner",
+        industry: "HVAC",
+        carrier: "T-Mobile",
       })
     );
 
@@ -127,6 +133,10 @@ describe("POST /api/billing/signup", () => {
     expect(body.checkoutSessionId).toBe("cs_seq_1");
     expect(body.alreadySubscribed).toBe(false);
     expect(body.sessionIssued).toBe(true);
+    const saved = await getBusinessByPhone("+12125550001");
+    expect(saved?.ownerName).toBe("Fresh Owner");
+    expect(saved?.industry).toBe("HVAC");
+    expect(saved?.carrier).toBe("tmobile");
 
     const cookies = response.headers.getSetCookie();
     const session = cookies.find((c) => c.startsWith("callflow_business_session="));
@@ -208,6 +218,15 @@ describe("POST /api/billing/signup", () => {
     // Knowing the phone number of a paying business must mint nothing.
     expect(response.headers.getSetCookie()).toEqual([]);
     expect(dodoMocks.checkoutCreate).not.toHaveBeenCalled();
+  });
+
+  it("rejects an unsupported industry before creating a customer or calling Dodo", async () => {
+    const response = await POST(
+      signupRequest({ phoneNumber: "+12125550041", industry: "Electrical" })
+    );
+    expect(response.status).toBe(400);
+    expect(await getBusinessByPhone("+12125550041")).toBeUndefined();
+    expect(dodoMocks.customerCreate).not.toHaveBeenCalled();
   });
 
   it("a different business owning the name is a 400 hard stop before any Dodo call", async () => {
