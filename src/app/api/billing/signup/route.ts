@@ -70,6 +70,9 @@ export async function POST(request: Request) {
         name: readString("name"),
         email: readString("email"),
         country: readString("country"),
+        ownerName: readString("ownerName"),
+        industry: readString("industry"),
+        carrier: readString("carrier"),
       });
 
     const response = NextResponse.json(
