@@ -112,6 +112,7 @@ CREATE TABLE IF NOT EXISTS businesses (
   billingName TEXT,
   billingEmail TEXT,
   billingCountry TEXT,
+  industry TEXT CHECK (industry IS NULL OR industry IN ('Plumbing', 'HVAC')),
   trialStartedAt TEXT,
   dodoCustomerId TEXT,
   dodoSubscriptionId TEXT,
