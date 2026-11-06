@@ -220,6 +220,15 @@ describe("POST /api/billing/signup", () => {
     expect(dodoMocks.checkoutCreate).not.toHaveBeenCalled();
   });
 
+  it("allows industry to be left blank", async () => {
+    const response = await POST(
+      signupRequest({ phoneNumber: "+12125550042", industry: "" })
+    );
+    expect(response.status).toBe(201);
+    const saved = await getBusinessByPhone("+12125550042");
+    expect(saved?.industry).toBeNull();
+  });
+
   it("rejects an unsupported industry before creating a customer or calling Dodo", async () => {
     const response = await POST(
       signupRequest({ phoneNumber: "+12125550041", industry: "Electrical" })
