@@ -702,14 +702,14 @@ export async function createBusiness(
       `INSERT INTO businesses (
          id, clientUid, phoneNumber, carrier, forwardingStatus, lastVerifiedAt,
          pendingVerificationFor, pendingVerificationExpiresAt, billingName,
-         billingEmail, billingCountry, trialStartedAt, dodoCustomerId,
+         billingEmail, billingCountry, industry, ownerName, trialStartedAt, dodoCustomerId,
          dodoSubscriptionId, dodoCheckoutSessionId, subscriptionStatus,
          subscriptionPaymentId, smsVerificationCode, smsVerificationExpiresAt,
          notificationEmail, assignedNumber, onboardingStep, createdAt, updatedAt
        ) VALUES (
          @id, @clientUid, @phoneNumber, @carrier, @forwardingStatus, @lastVerifiedAt,
          @pendingVerificationFor, @pendingVerificationExpiresAt, @billingName,
-         @billingEmail, @billingCountry, @trialStartedAt, @dodoCustomerId,
+         @billingEmail, @billingCountry, @industry, @ownerName, @trialStartedAt, @dodoCustomerId,
          @dodoSubscriptionId, @dodoCheckoutSessionId, @subscriptionStatus,
          @subscriptionPaymentId, @smsVerificationCode, @smsVerificationExpiresAt,
          @notificationEmail, @assignedNumber, @onboardingStep, @createdAt, @updatedAt
@@ -741,7 +741,8 @@ export async function updateBusiness(
          pendingVerificationFor = @pendingVerificationFor,
          pendingVerificationExpiresAt = @pendingVerificationExpiresAt,
          billingName = @billingName, billingEmail = @billingEmail,
-         billingCountry = @billingCountry, trialStartedAt = @trialStartedAt,
+         billingCountry = @billingCountry, industry = @industry, ownerName = @ownerName,
+         trialStartedAt = @trialStartedAt,
          dodoCustomerId = @dodoCustomerId, dodoSubscriptionId = @dodoSubscriptionId,
          dodoCheckoutSessionId = @dodoCheckoutSessionId,
          subscriptionStatus = @subscriptionStatus,
