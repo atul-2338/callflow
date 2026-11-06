@@ -194,6 +194,7 @@ const BUSINESS_ADDED_COLUMNS: ReadonlyArray<readonly [string, string]> = [
   ["billingName", "TEXT"],
   ["billingEmail", "TEXT"],
   ["billingCountry", "TEXT"],
+  ["industry", "TEXT"],
   ["trialStartedAt", "TEXT"],
   ["dodoCustomerId", "TEXT"],
   ["dodoSubscriptionId", "TEXT"],
