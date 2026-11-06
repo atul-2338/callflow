@@ -1,0 +1,49 @@
+name: Stage A validation
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - "src/**"
+      - "migrations/**"
+      - "package.json"
+      - "package-lock.json"
+      - "tsconfig.json"
+      - "next.config.ts"
+      - "vitest.config.ts"
+      - ".github/workflows/stage-a-validation.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: stage-a-validation-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    name: Tests, lint and production build (isolated CI)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Check out proposed branch
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install locked dependencies
+        run: npm ci
+
+      - name: Run automated tests
+        run: npm test
+
+      - name: Run lint
+        run: npm run lint
+
+      - name: Run production build
+        run: npm run build
