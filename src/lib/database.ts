@@ -205,9 +205,8 @@ const BUSINESS_ADDED_COLUMNS: ReadonlyArray<readonly [string, string]> = [
   ["smsVerificationExpiresAt", "TEXT"],
   ["notificationEmail", "TEXT"],
   ["address", "TEXT"],
-  // Owner display name, captured only by the admin "Create customer" form
-  // (/admin/customers). Nullable and unused by the self-serve flow, so existing
-  // rows and new signups simply leave it NULL.
+  // Owner display name, captured by both self-serve signup and admin creation.
+  // Nullable so existing rows remain valid until updated.
   ["ownerName", "TEXT"],
   // Owner password + one-time setup link. `passwordHash` is the same
   // self-describing scrypt string ADMIN_PASSWORD_HASH uses; `setupTokenHash`
