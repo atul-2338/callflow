@@ -64,6 +64,8 @@ describe("leads", () => {
       email: "status@example.com",
     });
 
+    // Ensure the ISO timestamp advances at millisecond precision.
+    await new Promise((resolve) => setTimeout(resolve, 5));
     const updated = await setLeadStatus(lead.id, "contacted");
     expect(updated?.status).toBe("contacted");
     expect(updated?.updatedAt).not.toBe(lead.updatedAt);
