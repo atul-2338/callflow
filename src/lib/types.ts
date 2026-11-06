@@ -161,6 +161,8 @@ export interface Business {
    */
   clientUid: string;
   phoneNumber: string;
+  /** Selected launch industry; NULL for legacy or unclassified businesses. */
+  industry?: "Plumbing" | "HVAC" | null;
   /**
    * The CallFlow DID bound to this business from the number pool
    * (data/phone_numbers.json, see src/lib/numbers-pool.ts): the number a
