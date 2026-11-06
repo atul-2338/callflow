@@ -222,7 +222,11 @@ describe("POST /api/billing/signup", () => {
 
   it("allows industry to be left blank", async () => {
     const response = await POST(
-      signupRequest({ phoneNumber: "+12125550042", industry: "" })
+      signupRequest({
+        phoneNumber: "+12125550042",
+        name: "Blank Industry Business",
+        industry: "",
+      })
     );
     expect(response.status).toBe(201);
     const saved = await getBusinessByPhone("+12125550042");
