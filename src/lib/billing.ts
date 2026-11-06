@@ -255,6 +255,14 @@ export type BillingSignupInput = {
 
 const ALLOWED_SIGNUP_INDUSTRIES = ["Plumbing", "HVAC"] as const;
 
+function isAllowedSignupIndustry(
+  value: string
+): value is (typeof ALLOWED_SIGNUP_INDUSTRIES)[number] {
+  return ALLOWED_SIGNUP_INDUSTRIES.includes(
+    value as (typeof ALLOWED_SIGNUP_INDUSTRIES)[number]
+  );
+}
+
 function isCountryCode(value: string): boolean {
   return /^[A-Z]{2}$/.test(value);
 }
@@ -341,7 +349,7 @@ export async function createBillingSignup(
     !name ||
     ownerName.length < 2 ||
     !carrier ||
-    (industry !== null && !ALLOWED_SIGNUP_INDUSTRIES.includes(industry as (typeof ALLOWED_SIGNUP_INDUSTRIES)[number])) ||
+    (industry !== null && !isAllowedSignupIndustry(industry)) ||
     !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) ||
     !isCountryCode(country)
   ) {
