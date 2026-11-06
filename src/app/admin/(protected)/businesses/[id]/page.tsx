@@ -64,6 +64,9 @@ export default async function AdminBusinessDetailPage({ params }: RouteParams) {
                 <span className="text-ink-3">pending_number</span>
               )}
             </Detail>
+            <Detail label="Owner name">{business.ownerName ?? "—"}</Detail>
+            <Detail label="Industry">{business.industry ?? "—"}</Detail>
+            <Detail label="Owner email">{business.billingEmail ?? "—"}</Detail>
             <Detail label="Carrier">{business.carrier}</Detail>
             <Detail label="Forwarding status">
               <StatusPill kind="forwarding" value={business.forwardingStatus} />
