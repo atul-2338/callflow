@@ -116,6 +116,9 @@ describe("createBillingSignup duplicate-name guard", () => {
         name: "  ACME Plumbing  ",
         email: "owner@acme.test",
         country: "US",
+        ownerName: "John Smith",
+        industry: "Plumbing",
+        carrier: "Verizon",
       })
     ).rejects.toBeInstanceOf(BusinessNameTakenError);
 
@@ -126,6 +129,9 @@ describe("createBillingSignup duplicate-name guard", () => {
         name: "Acme Plumbing",
         email: "owner@acme.test",
         country: "US",
+        ownerName: "John Smith",
+        industry: "Plumbing",
+        carrier: "Verizon",
       })
     ).rejects.toThrow(BUSINESS_NAME_TAKEN_ERROR);
 
@@ -150,6 +156,9 @@ describe("createBillingSignup duplicate-name guard", () => {
         name: " bobs repair ",
         email: "bobs@repair.test",
         country: "US",
+        ownerName: "Bob Smith",
+        industry: null,
+        carrier: "AT&T",
       })
     ).rejects.not.toBeInstanceOf(BusinessNameTakenError);
   });
