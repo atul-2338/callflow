@@ -1,6 +1,8 @@
 name: Stage A validation
 
 on:
+  push:
+    branches: [feature/stage-a-registration-data]
   pull_request:
     branches: [main]
     paths:
