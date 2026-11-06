@@ -682,6 +682,8 @@ export async function createBusiness(
     billingName: data.billingName ?? null,
     billingEmail: data.billingEmail ?? null,
     billingCountry: data.billingCountry ?? null,
+    industry: data.industry ?? null,
+    ownerName: data.ownerName ?? null,
     trialStartedAt: data.trialStartedAt ?? null,
     dodoCustomerId: data.dodoCustomerId ?? null,
     dodoSubscriptionId: data.dodoSubscriptionId ?? null,
