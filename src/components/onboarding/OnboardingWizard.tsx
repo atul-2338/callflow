@@ -11,18 +11,7 @@ import {
 } from "lucide-react";
 import { toE164InternationalPhone } from "@/lib/util";
 
-const INDUSTRIES = [
-  "Plumbing",
-  "HVAC",
-  "Electrical",
-  "Salon / Spa",
-  "Dental",
-  "Medical / Clinic",
-  "Restaurant",
-  "Automotive",
-  "Real estate",
-  "Other",
-];
+const INDUSTRIES = ["Plumbing", "HVAC"] as const;
 
 const CARRIERS = [
   "Verizon",
@@ -36,6 +25,7 @@ const COUNTRIES = ["US", "CA", "GB", "AU", "IN", "DE", "FR"];
 
 interface FormState {
   name: string;
+  ownerName: string;
   industry: string;
   carrier: string;
   phone: string;
@@ -48,7 +38,9 @@ type Errors = Partial<Record<keyof FormState, string>>;
 function validate(f: FormState): Errors {
   const e: Errors = {};
   if (f.name.trim().length < 2) e.name = "Enter your business name.";
-  if (!f.industry) e.industry = "Select your industry.";
+  if (f.ownerName.trim().length < 2) e.ownerName = "Enter the owner's name.";
+  if (f.industry && !INDUSTRIES.includes(f.industry as (typeof INDUSTRIES)[number]))
+    e.industry = "Select Plumbing or HVAC.";
   if (!f.carrier) e.carrier = "Select your carrier.";
   try {
     toE164InternationalPhone(f.phone, f.country);
@@ -71,6 +63,7 @@ export default function OnboardingWizard() {
   const [step, setStep] = useState<1 | 2>(1);
   const [form, setForm] = useState<FormState>({
     name: "",
+    ownerName: "",
     industry: "",
     carrier: "",
     phone: "",
@@ -217,13 +210,23 @@ function StepOne({
         />
       </Field>
 
-      <Field label="Industry" error={errors.industry}>
+      <Field label="Owner's name" error={errors.ownerName}>
+        <input
+          type="text"
+          value={form.ownerName}
+          onChange={(e) => onChange("ownerName", e.target.value)}
+          placeholder="e.g. John Smith"
+          className="ios-field"
+        />
+      </Field>
+
+      <Field label="Industry (optional)" error={errors.industry}>
         <select
           value={form.industry}
           onChange={(e) => onChange("industry", e.target.value)}
           className="ios-field appearance-none"
         >
-          <option value="">Select your industry…</option>
+          <option value="">Select your industry (optional)…</option>
           {INDUSTRIES.map((i) => (
             <option key={i} value={i}>
               {i}
@@ -345,6 +348,9 @@ function StepTwo({
           name: form.name.trim(),
           email: form.email.trim(),
           country,
+          ownerName: form.ownerName.trim(),
+          industry: form.industry || null,
+          carrier: form.carrier,
         }),
       });
     } catch {
