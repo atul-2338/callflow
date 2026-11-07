@@ -90,7 +90,7 @@ export async function POST(request: Request) {
         console.error("[owner-setup] could not issue setup token", { businessId: business.id });
         setupEmailSent = false;
       } else {
-        const configuredOrigin = process.env.PUBLIC_BASE_URL?.trim().replace(/\\/+$/, "");
+        const configuredOrigin = process.env.PUBLIC_BASE_URL?.trim().replace(/\/+$/, "");
         const origin = configuredOrigin || new URL(request.url).origin;
         const setupUrl = setupPasswordUrl(origin, setupToken.token);
         const smtp = readSmtpConfig();
@@ -100,12 +100,12 @@ export async function POST(request: Request) {
           });
           setupEmailSent = false;
         } else {
-          const firstName = (business.ownerName || "").trim().split(/\\s+/)[0] || "there";
+          const firstName = (business.ownerName || "").trim().split(/\s+/)[0] || "there";
           const sent = await sendOperatorAlertEmail(
             smtp,
             business.billingEmail,
             "Create your CallFlow password",
-            `Hi ${firstName},\\n\\nYour CallFlow account for ${business.billingName} is ready. Create your password using this secure link:\\n${setupUrl}\\n\\nThis link works once and expires in 48 hours. After setting your password, sign in at ${origin}/login.\\n\\n— CallFlow`
+            [`Hi ${firstName},`, "", `Your CallFlow account for ${business.billingName} is ready. Create your password using this secure link:`, setupUrl, "", "This link works once and expires in 48 hours.", "", `After setting your password, sign in at ${origin}/login.`, "", "— CallFlow"].join("\n")
           );
           setupEmailSent = sent.sent;
           if (!sent.sent) {
