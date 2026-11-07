@@ -103,7 +103,7 @@ export async function POST(request: Request) {
           const firstName = (business.ownerName || "").trim().split(/\s+/)[0] || "there";
           const sent = await sendOperatorAlertEmail(
             smtp,
-            business.billingEmail,
+            business.billingEmail ?? readString("email").trim(),
             "Create your CallFlow password",
             [`Hi ${firstName},`, "", `Your CallFlow account for ${business.billingName} is ready. Create your password using this secure link:`, setupUrl, "", "This link works once and expires in 48 hours.", "", `After setting your password, sign in at ${origin}/login.`, "", "— CallFlow"].join("\n")
           );
