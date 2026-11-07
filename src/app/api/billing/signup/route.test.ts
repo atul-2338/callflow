@@ -258,7 +258,7 @@ describe("POST /api/billing/signup", () => {
     const token = handoff!.split("=").slice(1).join("=").split(";")[0];
     expect(verifySignupHandoffToken(token)).toEqual({
       businessId: stored!.id,
-      checkoutSessionId: "cs_seq_2",
+      checkoutSessionId: `cs_seq_${customerSeq}`,
     });
   });
 
