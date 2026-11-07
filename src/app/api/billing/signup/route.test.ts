@@ -6,6 +6,10 @@ import { resetRateLimits } from "@/lib/rate-limit";
 import { closeDb } from "@/lib/database";
 import { createBusiness, getBusinessByPhone } from "@/lib/db";
 import { verifyCheckoutReturnToken, verifySignupHandoffToken } from "@/lib/signup-handoff";
+import { inspectSetupToken } from "@/lib/business-password";
+import { businessSessionCookieName, verifyBusinessSessionToken } from "@/lib/business-session";
+import { POST as setupPasswordPost } from "@/app/api/auth/setup-password/route";
+import { POST as ownerLoginPost } from "@/app/api/auth/login/route";
 import { POST } from "./route";
 
 // The signup route calls the Dodo SDK through getDodoClient(); swap it for
@@ -13,6 +17,15 @@ import { POST } from "./route";
 const dodoMocks = vi.hoisted(() => ({
   customerCreate: vi.fn(),
   checkoutCreate: vi.fn(),
+}));
+
+const emailMocks = vi.hoisted(() => ({
+  send: vi.fn(),
+}));
+
+vi.mock("@/lib/email", () => ({
+  readSmtpConfig: () => ({ host: "smtp.test", port: 587, user: "test", pass: "test", from: "CallFlow <noreply@callflow.test>" }),
+  sendOperatorAlertEmail: emailMocks.send,
 }));
 
 vi.mock("@/lib/dodo", () => ({
@@ -68,6 +81,9 @@ function signupRequest(overrides: Record<string, unknown> = {}): Request {
       name: "Reeves Plumbing",
       email: "owner@reeves.test",
       country: "US",
+      ownerName: "Test Owner",
+      industry: "Plumbing",
+      carrier: "Verizon",
       ...overrides,
     }),
   });
@@ -92,6 +108,8 @@ describe("POST /api/billing/signup", () => {
     // is monotonic across the whole file, never reset between tests.
     dodoMocks.customerCreate.mockReset();
     dodoMocks.customerCreate.mockImplementation(() => ({ customer_id: `cus_seq_${++customerSeq}` }));
+    emailMocks.send.mockReset();
+    emailMocks.send.mockResolvedValue({ sent: true, messageId: "setup-email-test" });
     dodoMocks.checkoutCreate.mockReset();
     dodoMocks.checkoutCreate.mockImplementation(() => ({
       session_id: `cs_seq_${customerSeq}`,
@@ -117,6 +135,9 @@ describe("POST /api/billing/signup", () => {
         phoneNumber: "+12125550001",
         name: "Fresh Biz",
         email: "fresh@reeves.test",
+        ownerName: "Fresh Owner",
+        industry: "HVAC",
+        carrier: "T-Mobile",
       })
     );
 
@@ -127,6 +148,10 @@ describe("POST /api/billing/signup", () => {
     expect(body.checkoutSessionId).toBe("cs_seq_1");
     expect(body.alreadySubscribed).toBe(false);
     expect(body.sessionIssued).toBe(true);
+    const saved = await getBusinessByPhone("+12125550001");
+    expect(saved?.ownerName).toBe("Fresh Owner");
+    expect(saved?.industry).toBe("HVAC");
+    expect(saved?.carrier).toBe("tmobile");
 
     const cookies = response.headers.getSetCookie();
     const session = cookies.find((c) => c.startsWith("callflow_business_session="));
@@ -134,6 +159,59 @@ describe("POST /api/billing/signup", () => {
     expect(session).toContain("HttpOnly");
     expect(session).toContain("SameSite=Lax");
     expect(cookieNames(response)).not.toContain("callflow_signup_handoff");
+  });
+
+  it("new self-service signup emails a one-time password setup link that completes owner login", async () => {
+    const response = await POST(
+      signupRequest({
+        phoneNumber: "+12125550061",
+        name: "Login Flow Plumbing",
+        email: "login-flow@reeves.test",
+        ownerName: "Login Owner",
+      })
+    );
+
+    expect(response.status).toBe(201);
+    const body = (await response.json()) as Record<string, unknown>;
+    expect(body.setupEmailSent).toBe(true);
+    expect(emailMocks.send).toHaveBeenCalledTimes(1);
+    expect(emailMocks.send.mock.calls[0][1]).toBe("login-flow@reeves.test");
+
+    const emailText = emailMocks.send.mock.calls[0][3] as string;
+    const setupUrl = emailText.split("\n").find((line) => line.includes("/setup-password?token="));
+    expect(setupUrl).toBeTruthy();
+    const setupToken = new URL(setupUrl!).searchParams.get("token") || "";
+    const inspected = inspectSetupToken(setupToken);
+    expect(inspected.state).toBe("valid");
+    if (inspected.state !== "valid") throw new Error("Expected a valid password setup token");
+    expect(inspected.businessId).toBe(body.businessId);
+
+    const setupResponse = await setupPasswordPost(
+      new Request("http://localhost:3000/api/auth/setup-password", {
+        method: "POST",
+        headers: { "content-type": "application/json", "x-forwarded-for": "203.0.113.71" },
+        body: JSON.stringify({
+          token: setupToken,
+          password: "login-flow-password-1",
+          confirm: "login-flow-password-1",
+        }),
+      })
+    );
+    expect(setupResponse.status).toBe(200);
+
+    const loginResponse = await ownerLoginPost(
+      new Request("http://localhost:3000/api/auth/login", {
+        method: "POST",
+        headers: { "content-type": "application/json", "x-forwarded-for": "203.0.113.72" },
+        body: JSON.stringify({ email: "login-flow@reeves.test", password: "login-flow-password-1" }),
+      })
+    );
+    expect(loginResponse.status).toBe(200);
+    expect(await loginResponse.json()).toEqual({ ok: true });
+    const sessionCookie = loginResponse.headers.get("set-cookie") || "";
+    expect(sessionCookie.startsWith(`${businessSessionCookieName()}=`)).toBe(true);
+    const sessionToken = sessionCookie.split(";")[0].slice(businessSessionCookieName().length + 1);
+    expect(verifyBusinessSessionToken(sessionToken)).toBe(body.businessId);
   });
 
   it("pre-created business (the /setup flow): 201, handoff cookie, NO session cookie", async () => {
@@ -149,9 +227,9 @@ describe("POST /api/billing/signup", () => {
     expect(body.businessId).toBe(stored!.id);
     expect(body.sessionIssued).toBe(false);
     expect(body.alreadySubscribed).toBe(false);
-    expect(body.checkoutUrl).toBe("https://checkout.dodo.test/pay/cs_seq_2");
+    expect(body.checkoutUrl).toBe(`https://checkout.dodo.test/pay/cs_seq_${customerSeq}`);
     // The row now carries the checkout session the handoff binds to.
-    expect(stored!.dodoCheckoutSessionId).toBe("cs_seq_2");
+    expect(stored!.dodoCheckoutSessionId).toBe(`cs_seq_${customerSeq}`);
 
     // The return URL Dodo sends the browser back to carries a signed account
     // id, so the return page can identify this business even when the browser
@@ -180,7 +258,7 @@ describe("POST /api/billing/signup", () => {
     const token = handoff!.split("=").slice(1).join("=").split(";")[0];
     expect(verifySignupHandoffToken(token)).toEqual({
       businessId: stored!.id,
-      checkoutSessionId: "cs_seq_2",
+      checkoutSessionId: `cs_seq_${customerSeq}`,
     });
   });
 
@@ -208,6 +286,28 @@ describe("POST /api/billing/signup", () => {
     // Knowing the phone number of a paying business must mint nothing.
     expect(response.headers.getSetCookie()).toEqual([]);
     expect(dodoMocks.checkoutCreate).not.toHaveBeenCalled();
+  });
+
+  it("allows industry to be left blank", async () => {
+    const response = await POST(
+      signupRequest({
+        phoneNumber: "+12125550042",
+        name: "Blank Industry Business",
+        industry: "",
+      })
+    );
+    expect(response.status).toBe(201);
+    const saved = await getBusinessByPhone("+12125550042");
+    expect(saved?.industry).toBeNull();
+  });
+
+  it("rejects an unsupported industry before creating a customer or calling Dodo", async () => {
+    const response = await POST(
+      signupRequest({ phoneNumber: "+12125550041", industry: "Electrical" })
+    );
+    expect(response.status).toBe(400);
+    expect(await getBusinessByPhone("+12125550041")).toBeUndefined();
+    expect(dodoMocks.customerCreate).not.toHaveBeenCalled();
   });
 
   it("a different business owning the name is a 400 hard stop before any Dodo call", async () => {

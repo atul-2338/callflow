@@ -246,9 +246,22 @@ export class BusinessNameTakenError extends Error {
 export type BillingSignupInput = {
   phoneNumber: string;
   name: string;
+  ownerName: string;
   email: string;
   country: string;
+  industry: string | null;
+  carrier: string;
 };
+
+const ALLOWED_SIGNUP_INDUSTRIES = ["Plumbing", "HVAC"] as const;
+
+function isAllowedSignupIndustry(
+  value: string
+): value is (typeof ALLOWED_SIGNUP_INDUSTRIES)[number] {
+  return ALLOWED_SIGNUP_INDUSTRIES.includes(
+    value as (typeof ALLOWED_SIGNUP_INDUSTRIES)[number]
+  );
+}
 
 function isCountryCode(value: string): boolean {
   return /^[A-Z]{2}$/.test(value);
@@ -319,11 +332,24 @@ export async function createBillingSignup(
   input: BillingSignupInput
 ): Promise<BillingSignupResult> {
   const name = input.name.trim();
+  const ownerName = input.ownerName.trim();
   const email = input.email.trim().toLowerCase();
   const country = input.country.trim().toUpperCase();
+  const industry = input.industry?.trim() || null;
+  const carrierLabels: Record<string, Business["carrier"]> = {
+    "Verizon": "verizon",
+    "T-Mobile": "tmobile",
+    "AT&T": "att",
+    "UScellular": "other",
+    "Other / MVNO": "other",
+  };
+  const carrier = carrierLabels[input.carrier] ?? null;
 
   if (
     !name ||
+    ownerName.length < 2 ||
+    !carrier ||
+    (industry !== null && !isAllowedSignupIndustry(industry)) ||
     !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) ||
     !isCountryCode(country)
   ) {
@@ -363,7 +389,9 @@ export async function createBillingSignup(
   if (!business) {
     business = await createBusiness({
       phoneNumber,
-      carrier: "other",
+      carrier,
+      ownerName,
+      industry,
       forwardingStatus: "not_started",
       lastVerifiedAt: null,
       pendingVerificationFor: null,
@@ -380,6 +408,9 @@ export async function createBillingSignup(
         billingName: name,
         billingEmail: email,
         billingCountry: country,
+        ownerName,
+        industry,
+        carrier,
         subscriptionStatus: "pending_checkout",
       })) ?? business;
   }

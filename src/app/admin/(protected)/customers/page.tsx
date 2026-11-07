@@ -73,6 +73,11 @@ export default async function AdminCustomersPage() {
                           Owner: {business.ownerName}
                         </span>
                       )}
+                      {business.industry && (
+                        <span className="block text-xs text-ink-3">
+                          Industry: {business.industry}
+                        </span>
+                      )}
                     </td>
                     <td className="px-5 py-3 font-mono text-xs text-ink">
                       {business.assignedNumber ?? (

@@ -10,6 +10,11 @@ import {
   describeBillingAccess,
   trialEndsAt,
 } from "@/lib/billing";
+import {
+  issueBusinessSetupToken,
+  setupPasswordUrl,
+} from "@/lib/business-password";
+import { readSmtpConfig, sendOperatorAlertEmail } from "@/lib/email";
 import { clientIp, rateLimit } from "@/lib/rate-limit";
 import { createSignupHandoffToken, signupHandoffCookie } from "@/lib/signup-handoff";
 
@@ -70,7 +75,48 @@ export async function POST(request: Request) {
         name: readString("name"),
         email: readString("email"),
         country: readString("country"),
+        ownerName: readString("ownerName"),
+        industry: readString("industry"),
+        carrier: readString("carrier"),
       });
+
+    // New self-service accounts receive the same 48-hour password setup
+    // flow as admin-created accounts. The raw token is emailed only; it is
+    // never returned in this public signup response or logged.
+    let setupEmailSent: boolean | null = null;
+    if (created) {
+      const setupToken = issueBusinessSetupToken(business.id);
+      if (!setupToken) {
+        console.error("[owner-setup] could not issue setup token", { businessId: business.id });
+        setupEmailSent = false;
+      } else {
+        const configuredOrigin = process.env.PUBLIC_BASE_URL?.trim().replace(/\/+$/, "");
+        const origin = configuredOrigin || new URL(request.url).origin;
+        const setupUrl = setupPasswordUrl(origin, setupToken.token);
+        const smtp = readSmtpConfig();
+        if (!smtp) {
+          console.error("[owner-setup] SMTP is not configured; setup email was not sent", {
+            businessId: business.id,
+          });
+          setupEmailSent = false;
+        } else {
+          const firstName = (business.ownerName || "").trim().split(/\s+/)[0] || "there";
+          const sent = await sendOperatorAlertEmail(
+            smtp,
+            business.billingEmail ?? readString("email").trim(),
+            "Create your CallFlow password",
+            [`Hi ${firstName},`, "", `Your CallFlow account for ${business.billingName} is ready. Create your password using this secure link:`, setupUrl, "", "This link works once and expires in 48 hours.", "", `After setting your password, sign in at ${origin}/login.`, "", "— CallFlow"].join("\n")
+          );
+          setupEmailSent = sent.sent;
+          if (!sent.sent) {
+            console.error("[owner-setup] setup email could not be sent", {
+              businessId: business.id,
+              error: sent.error || "Email send failed",
+            });
+          }
+        }
+      }
+    }
 
     const response = NextResponse.json(
       {
@@ -83,6 +129,7 @@ export async function POST(request: Request) {
         checkoutSessionId,
         alreadySubscribed,
         sessionIssued: created,
+        setupEmailSent,
       },
       { status: 201 }
     );

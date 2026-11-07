@@ -156,6 +156,30 @@ export function setupPasswordUrl(origin: string, token: string): string {
   return `${origin.replace(/\/+$/, "")}${SETUP_PASSWORD_PATH}?token=${encodeURIComponent(token)}`;
 }
 
+/**
+ * Issue a fresh one-time password setup link for a newly created business.
+ * Only the token hash is persisted; the raw token is returned to the caller
+ * for delivery to the owner email address.
+ */
+export function issueBusinessSetupToken(businessId: string, now = new Date()): MintedSetupToken | null {
+  const minted = generateSetupToken(now);
+  const info = getDb()
+    .prepare(
+      `UPDATE businesses
+          SET setupTokenHash = @tokenHash,
+              setupTokenExpiry = @expiresAt,
+              setupTokenUsedAt = NULL,
+              updatedAt = @now
+        WHERE id = @businessId`
+    )
+    .run({
+      businessId,
+      tokenHash: minted.tokenHash,
+      expiresAt: minted.expiresAt,
+      now: now.toISOString(),
+    });
+  return info.changes === 1 ? minted : null;
+}
 export type SetupTokenState =
   | { state: "valid"; businessId: string; expiresAt: string }
   | { state: "invalid" }

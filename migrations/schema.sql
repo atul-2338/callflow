@@ -112,6 +112,7 @@ CREATE TABLE IF NOT EXISTS businesses (
   billingName TEXT,
   billingEmail TEXT,
   billingCountry TEXT,
+  industry TEXT CHECK (industry IS NULL OR industry IN ('Plumbing', 'HVAC')),
   trialStartedAt TEXT,
   dodoCustomerId TEXT,
   dodoSubscriptionId TEXT,
@@ -126,8 +127,8 @@ CREATE TABLE IF NOT EXISTS businesses (
   -- Owner alert email (Settings → Business information → Email). New-call
   -- alert emails are sent here (src/lib/email.ts + dograh-webhook.ts).
   notificationEmail TEXT,
-  -- Owner's display name as typed by an admin in /admin/customers → "Create
-  -- customer". NULL for self-serve signups, which never collect it.
+  -- Owner's display name, collected during self-serve signup or admin creation.
+  -- NULL for legacy records created before the field was collected.
   ownerName TEXT,
   -- Owner password: the SAME self-describing scrypt string ADMIN_PASSWORD_HASH
   -- uses (scrypt$N$r$p$salt$hash — src/lib/business-password.ts). NULL until the
