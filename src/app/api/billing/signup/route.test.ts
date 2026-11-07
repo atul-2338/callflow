@@ -227,9 +227,9 @@ describe("POST /api/billing/signup", () => {
     expect(body.businessId).toBe(stored!.id);
     expect(body.sessionIssued).toBe(false);
     expect(body.alreadySubscribed).toBe(false);
-    expect(body.checkoutUrl).toBe("https://checkout.dodo.test/pay/cs_seq_2");
+    expect(body.checkoutUrl).toBe(`https://checkout.dodo.test/pay/cs_seq_${customerSeq}`);
     // The row now carries the checkout session the handoff binds to.
-    expect(stored!.dodoCheckoutSessionId).toBe("cs_seq_2");
+    expect(stored!.dodoCheckoutSessionId).toBe(`cs_seq_${customerSeq}`);
 
     // The return URL Dodo sends the browser back to carries a signed account
     // id, so the return page can identify this business even when the browser
