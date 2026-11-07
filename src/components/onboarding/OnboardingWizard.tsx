@@ -108,11 +108,19 @@ export default function OnboardingWizard() {
 
   return (
     <div className="flex min-h-screen flex-col px-4 pb-16">
-      <header className="mx-auto flex w-full max-w-md items-center gap-2.5 py-6">
-        <div className="flex h-9 w-9 items-center justify-center rounded-[10px] bg-gold text-[#0b1f3a] shadow-[var(--shadow-pill)]">
-          <Phone className="h-4.5 w-4.5" />
+      <header className="mx-auto flex w-full max-w-md items-center justify-between gap-3 py-6">
+        <div className="flex items-center gap-2.5">
+          <div className="flex h-9 w-9 items-center justify-center rounded-[10px] bg-gold text-[#0b1f3a] shadow-[var(--shadow-pill)]">
+            <Phone className="h-4.5 w-4.5" />
+          </div>
+          <span className="text-lg font-semibold tracking-tight">CallFlow</span>
         </div>
-        <span className="text-lg font-semibold tracking-tight">CallFlow</span>
+        <p className="text-sm text-white/70">
+          Already have an account?{" "}
+          <Link href="/login" className="font-semibold text-gold underline underline-offset-4">
+            Log in
+          </Link>
+        </p>
       </header>
 
       <div className="mx-auto w-full max-w-md">
