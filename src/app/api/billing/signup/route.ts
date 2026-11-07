@@ -91,10 +91,7 @@ export async function POST(request: Request) {
         setupEmailSent = false;
       } else {
         const configuredOrigin = process.env.PUBLIC_BASE_URL?.trim().replace(/\\/+$/, "");
-        const forwardedProto = request.headers.get("x-forwarded-proto");
-        const forwardedHost = request.headers.get("x-forwarded-host");
-        const requestHost = request.headers.get("host") || new URL(request.url).host;
-        const origin = configuredOrigin || `${forwardedProto || new URL(request.url).protocol.replace(":", "")}://${forwardedHost || requestHost}`;
+        const origin = configuredOrigin || new URL(request.url).origin;
         const setupUrl = setupPasswordUrl(origin, setupToken.token);
         const smtp = readSmtpConfig();
         if (!smtp) {
